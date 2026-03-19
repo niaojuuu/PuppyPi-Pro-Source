@@ -431,7 +431,7 @@ def action_hello():
     action_nod()
 
 def action_two_leg_stand():
-    """两脚站立（后腿直立）"""
+    """两脚站立（后腿直立）- 通过代码编排尽可能站高站稳，获取更多摄像头视野"""
     global run_action_group_srv
     # 优先调用预制动作组文件
     if run_action_group_srv is not None:
@@ -440,14 +440,31 @@ def action_two_leg_stand():
             return
         except Exception as e:
             print(f"[两脚站立] 动作组调用失败({e})，使用姿态近似")
-    # 姿态近似：重心后移 + 最大仰角，让前腿自然抬起
-    PuppyPosePub.publish(stance_x=0, stance_y=0, x_shift=2.0,
-        height=-9, roll=math.radians(0), pitch=math.radians(-25), yaw=0, run_time=600)
-    rospy.sleep(0.8)
-    PuppyPosePub.publish(stance_x=0, stance_y=0, x_shift=3.0,
-        height=-9, roll=math.radians(0), pitch=math.radians(-30), yaw=0, run_time=400)
-    rospy.sleep(2.0)
-    reset_pose()
+
+    # puppy.py PoseFun 限制: |pitch|<=31°, -15<=height<=-5,
+    #   |stance_x|<=5, |stance_y|<=5, |x_shift|<=10
+    # 策略: 分步渐进——先降重心、展开后腿增稳，再逐步后移重心+仰角抬升前身
+
+    # 第1步: 降低重心，后腿横向展开增加稳定性
+    PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=1.0,
+        height=-11, roll=math.radians(0), pitch=math.radians(0), yaw=0, run_time=500)
+    rospy.sleep(0.6)
+
+    # 第2步: 重心开始后移，小幅仰角
+    PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=3.5,
+        height=-11, roll=math.radians(0), pitch=math.radians(-12), yaw=0, run_time=500)
+    rospy.sleep(0.6)
+
+    # 第3步: 继续后移重心，加大仰角，前腿开始离地
+    PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=5.5,
+        height=-12, roll=math.radians(0), pitch=math.radians(-22), yaw=0, run_time=500)
+    rospy.sleep(0.7)
+
+    # 第4步: 最大站立姿态——大幅后移重心 + 接近仰角上限 + 后腿充分伸展
+    # x_shift=7 把重心牢牢压在后腿上; height=-13 让后腿更高; pitch=-30° 接近31°限制
+    PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=7.0,
+        height=-13, roll=math.radians(0), pitch=math.radians(-30), yaw=0, run_time=600)
+    rospy.sleep(0.8)  # 等待姿态稳定，之后保持站立
 
 # ==================== 跟随模式（摄像头人体检测） ====================
 follow_thread = None
