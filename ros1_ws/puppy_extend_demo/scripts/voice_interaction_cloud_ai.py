@@ -573,25 +573,38 @@ def action_find_object(target):
             return False, 'center', 'unknown'
 
     def ask_decision(b64, search_history):
-        """根据当前图像和完整搜索历史，让LLM决定下一步动作（含两脚站立选项）"""
+        """根据当前图像和完整搜索历史，让LLM决定下一步搜索策略"""
         if search_history:
             history_text = '搜索历史（从早到晚）：\n' + '\n'.join(
                 f'  第{h["round"]}轮：{h["desc"]}' for h in search_history
             )
         else:
-            history_text = '搜索历史：暂无。'
+            history_text = '搜索历史：暂无（第一轮搜索）。'
+
+        # 统计历史中各动作的使用次数
+        stand_count = sum(1 for h in search_history if 'two_leg_stand' in h.get('desc', ''))
+        turn_count = sum(1 for h in search_history if 'turn_' in h.get('desc', ''))
+        forward_count = sum(1 for h in search_history if 'forward' in h.get('desc', ''))
+        stats_text = f'已执行统计：站立{stand_count}次，转向{turn_count}次，前进{forward_count}次'
 
         prompt = (
-            f'这是一只矮小机器狗正前方摄像头拍摄的画面，摄像头位置很低，视角偏低。\n'
-            f'机器狗正在寻找"{target}"，当前正常视角未找到目标。\n'
-            f'{history_text}\n\n'
-            f'可选动作说明：\n'
-            f'  forward：向前移动探索\n'
-            f'  turn_left：原地左转换方向\n'
-            f'  turn_right：原地右转换方向\n'
-            f'  two_leg_stand：仰起身体使摄像头升高，适合查看桌面、架子等较高位置；'
-            f'若历史中已多次使用两脚站立仍未找到，应优先选择移动换位置再尝试。\n\n'
-            f'根据当前图像和搜索历史综合判断，选择最佳动作。'
+            f'这是一只矮小机器狗正前方摄像头拍摄的画面，摄像头位置很低（离地约10cm），视角偏低。\n'
+            f'机器狗正在寻找"{target}"，当前正常视角未发现目标。\n'
+            f'{history_text}\n'
+            f'{stats_text}\n\n'
+            f'你需要根据目标物品特征、当前画面环境、搜索历史综合判断最佳动作：\n'
+            f'可选动作：\n'
+            f'  forward   - 向前移动探索新区域（适合：目标可能在前方远处、需要换区域搜索）\n'
+            f'  turn_left - 原地左转换方向（适合：需要扫描左侧区域、前方已搜过）\n'
+            f'  turn_right- 原地右转换方向（适合：需要扫描右侧区域、前方已搜过）\n'
+            f'  two_leg_stand - 仰起身体升高摄像头视角（适合：目标可能在桌面、架子等'
+            f'高处；但注意若近几轮已站立搜过仍没找到，应优先移动换位置）\n\n'
+            f'搜索策略提示：\n'
+            f'- 如果目标是日常小物件（杯子、遥控器等），可能在桌面高处，考虑站立\n'
+            f'- 如果目标可能在地面（鞋子、球等），优先转向和前进\n'
+            f'- 如果同一位置已经站立过但没找到，应先移动到新位置\n'
+            f'- 如果连续多次转向仍没找到，考虑前进换区域\n'
+            f'- 避免连续重复同一动作超过2次\n\n'
             f'严格只输出JSON，不要其他内容。'
             f'格式：{{"action":"forward或turn_left或turn_right或two_leg_stand","reason":"简短原因"}}'
         )
@@ -604,6 +617,9 @@ def action_find_object(target):
         try:
             d = json.loads(raw[s:e + 1])
             act = d.get('action', 'turn_right')
+            # 防止无效动作
+            if act not in ('forward', 'turn_left', 'turn_right', 'two_leg_stand'):
+                act = 'turn_right'
             reason = d.get('reason', '')
             print(f'[寻物] LLM决策: {act}（{reason}）')
             return act, reason
@@ -668,43 +684,56 @@ def action_find_object(target):
                     elif position == 'right':
                         move_safe('turn_right', 0.6)
                     move_safe('forward', 2.0)
+                    search_history.append({'round': iteration + 1,
+                        'desc': f'正常视角远处发现目标({position})，已靠近'})
                     continue
                 else:
                     # 近处确认找到，停下
                     found = True
                     break
 
-        # --- 步骤2：正常视角未找到，抬高视角检测 ---
-        # 直接发布姿态而不调用 action_two_leg_stand()，
-        # 以便在高位姿态稳定时拍照，而不是恢复后才拍
-        print('[寻物] 正常视角未找到，抬高视角检测...')
-        PuppyPosePub.publish(stance_x=0, stance_y=0, x_shift=2.0,
-            height=-9, roll=math.radians(0), pitch=math.radians(-25), yaw=0, run_time=600)
-        rospy.sleep(0.8)
-        PuppyPosePub.publish(stance_x=0, stance_y=0, x_shift=3.0,
-            height=-9, roll=math.radians(0), pitch=math.radians(-30), yaw=0, run_time=400)
-        rospy.sleep(0.8)  # 等待姿态稳定后拍照
+        # --- 步骤2：正常视角未找到，由LLM决策下一步动作 ---
+        b64_decision = b64 or capture()
+        next_action, reason = ask_decision(b64_decision, search_history) if b64_decision else ('turn_right', '无图像')
 
-        b64_high = capture()
-        reset_pose()
-        rospy.sleep(0.5)
+        if next_action == 'two_leg_stand':
+            # LLM决定抬高视角搜索
+            print(f'[寻物] LLM决定站立搜索（{reason}）')
+            # 渐进式抬高：先后移重心，再仰角升高
+            PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=3.5,
+                height=-11, roll=math.radians(0), pitch=math.radians(-12), yaw=0, run_time=500)
+            rospy.sleep(0.6)
+            PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=7.0,
+                height=-13, roll=math.radians(0), pitch=math.radians(-30), yaw=0, run_time=600)
+            rospy.sleep(0.8)
 
-        if b64_high:
-            found_flag, position, hint = check_target(b64_high)
-            if found_flag:
-                print(f'[寻物] 高视角发现目标（{position}），对准并靠近...')
-                if position == 'left':
-                    move_safe('turn_left', 0.6)
-                elif position == 'right':
-                    move_safe('turn_right', 0.6)
-                move_safe('forward', 2.0)
-                continue  # 靠近后下轮再次确认
+            b64_high = capture()
+            # 恢复姿态
+            PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=3.5,
+                height=-11, roll=math.radians(0), pitch=math.radians(-12), yaw=0, run_time=500)
+            rospy.sleep(0.5)
+            reset_pose()
+            rospy.sleep(0.5)
 
-        # --- 步骤3：两种视角均未找到，让 LLM 根据图像决策移动方向 ---
-        b64_move = capture()
-        next_action, reason = ask_decision(b64_move, search_history) if b64_move else ('turn_right', '无图像')
-        search_history.append({'round': iteration + 1, 'desc': f'动作={next_action}，原因={reason}'})
-        move_safe(next_action, 1.2)
+            if b64_high:
+                found_flag, position, hint = check_target(b64_high)
+                if found_flag:
+                    print(f'[寻物] 高视角发现目标（{position}），对准并靠近...')
+                    if position == 'left':
+                        move_safe('turn_left', 0.6)
+                    elif position == 'right':
+                        move_safe('turn_right', 0.6)
+                    move_safe('forward', 2.0)
+                    search_history.append({'round': iteration + 1,
+                        'desc': f'动作=two_leg_stand，原因={reason}，高视角发现目标({position})已靠近'})
+                    continue
+            search_history.append({'round': iteration + 1,
+                'desc': f'动作=two_leg_stand，原因={reason}，高视角未发现'})
+        else:
+            # forward / turn_left / turn_right
+            search_history.append({'round': iteration + 1,
+                'desc': f'动作={next_action}，原因={reason}'})
+            move_safe(next_action, 1.2)
         rospy.sleep(0.2)
 
     # ======== 清理 ========
