@@ -1363,27 +1363,46 @@ def recognize_speech_with_qwen(wav_path):
         # 使用阿里云 DashScope 的语音识别 API（HTTP 方式）
         headers = {
             'Authorization': f'Bearer {DASHSCOPE_API_KEY}',
+            'Content-Type': 'application/json'
         }
 
-        # 步骤 1: 上传文件获取 URL
-        upload_url = 'https://dashscope.aliyuncs.com/api/v1/uploads'
-        with open(wav_path, 'rb') as f:
-            files = {'file': f}
-            upload_resp = requests.post(upload_url, files=files, headers=headers)
+        # 步骤 1: 创建上传请求获取上传 URL
+        upload_request_url = 'https://dashscope.aliyuncs.com/api/v1/uploads/request'
+        upload_data = {
+            'name': 'asr_audio.wav',
+            'content_type': 'audio/wav'
+        }
+        upload_resp = requests.post(upload_request_url, json=upload_data, headers=headers)
 
         if upload_resp.status_code != 200:
-            print(f"[千问语音识别] 上传失败：{upload_resp.status_code} - {upload_resp.text}")
+            print(f"[千问语音识别] 获取上传 URL 失败：{upload_resp.status_code} - {upload_resp.text}")
             return None
 
-        upload_data = upload_resp.json()
-        if 'data' not in upload_data or 'url' not in upload_data['data']:
-            print(f"[千问语音识别] 上传响应异常：{upload_data}")
+        upload_info = upload_resp.json()
+        if 'data' not in upload_info:
+            print(f"[千问语音识别] 上传响应异常：{upload_info}")
             return None
 
-        file_url = upload_data['data']['url']
+        upload_url = upload_info['data']['url']
+        object_key = upload_info['data']['object_key']
+        print(f"[千问语音识别] 获取上传 URL: {upload_url}")
+
+        # 步骤 2: 使用 PUT 方法上传文件到 OSS
+        with open(wav_path, 'rb') as f:
+            audio_data = f.read()
+
+        put_resp = requests.put(upload_url, data=audio_data,
+                                 headers={'Content-Type': 'audio/wav'})
+
+        if put_resp.status_code != 200:
+            print(f"[千问语音识别] 文件上传失败：{put_resp.status_code}")
+            return None
+
+        # 构建文件访问 URL
+        file_url = f"https://dashscope.oss.cn-beijing.aliyuncs.com/{object_key}"
         print(f"[千问语音识别] 文件上传成功：{file_url}")
 
-        # 步骤 2: 创建识别任务
+        # 步骤 3: 创建识别任务
         task_url = 'https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription/tasks'
         task_data = {
             'model': 'paraformer-turbo-v2',
@@ -1399,7 +1418,7 @@ def recognize_speech_with_qwen(wav_path):
         task_id = task_resp.json()['data']['task_id']
         print(f"[千问语音识别] 任务 ID: {task_id}")
 
-        # 步骤 3: 轮询任务状态
+        # 步骤 4: 轮询任务状态
         import time
         max_wait = 60  # 最多等待 60 秒
         start_time = time.time()
