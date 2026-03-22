@@ -116,9 +116,9 @@ def find_serial_port():
     )
 
 # 录音配置
-MIC_SAMPLE_RATE = 16000  # 麦克风采样率（Qwen-Audio 支持 16k）
+MIC_SAMPLE_RATE = 48000  # USB 麦克风硬件采样率（48k 是标准 USB 音频采样率）
 CHANNELS = 1
-MIC_CHUNK = 1600  # 100ms per chunk (16000 * 0.1)
+MIC_CHUNK = 4800  # 100ms per chunk (48000 * 0.1)
 SILENCE_THRESHOLD = 3000  # 能量阈值（根据实际底噪调整）
 SILENCE_DURATION = 1.0   # 静音持续秒数触发结束
 MAX_RECORD_SECONDS = 15  # 云端识别支持更长录音
