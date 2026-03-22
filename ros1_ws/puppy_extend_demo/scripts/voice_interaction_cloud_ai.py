@@ -123,7 +123,7 @@ SILENCE_DURATION = 1.0   # 静音持续秒数触发结束
 MAX_RECORD_SECONDS = 6
 
 # LLM配置 - 通过环境变量 LLM_PROVIDER 切换后端：claude(默认) 或 qwen
-LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'claude').lower()  # claude / qwen
+LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'qwen').lower()  # claude / qwen
 
 # Anthropic Claude 配置（支持 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL 环境变量）
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', 'sk-kvlFi3r0OgZDQJsltslJTmNZYUI0eFVKEHcjEkxfH9OeS')
