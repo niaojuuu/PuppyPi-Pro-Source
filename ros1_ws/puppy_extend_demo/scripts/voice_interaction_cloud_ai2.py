@@ -1360,11 +1360,12 @@ def recognize_speech_with_qwen(wav_path):
     print("[千问语音识别] 开始识别...")
 
     try:
-        # 使用 dashscope SDK 调用语音识别
-        from dashscope import SpeechSyncAsr
+        import dashscope
+        from dashscope import AsrTranscriptionRequest
+        from dashscope import AsrTranscription
 
         # 使用 Paraformer 模型进行语音识别
-        result = SpeechSyncAsr.call(
+        result = AsrTranscription.call(
             model='paraformer-v2',
             format='wav',
             file_path=wav_path
@@ -1394,6 +1395,11 @@ def recognize_speech_with_qwen(wav_path):
 
         return text
 
+    except ImportError:
+        # dashscope 版本太旧，使用 HTTP API 直接调用
+        print("[千问语音识别] 使用 HTTP API 调用...")
+        return recognize_speech_with_http(wav_path)
+
     except Exception as e:
         print(f"[千问语音识别] 错误：{e}")
         import traceback
@@ -1403,6 +1409,111 @@ def recognize_speech_with_qwen(wav_path):
         except Exception:
             pass
         return None
+
+
+def recognize_speech_with_http(wav_path):
+    """使用 HTTP API 调用阿里云语音识别（备用方案）"""
+    import requests
+    import time
+
+    headers = {'Authorization': f'Bearer {DASHSCOPE_API_KEY}'}
+
+    # 步骤 1: 上传文件到 DashScope
+    file_url = _upload_file_to_dashscope(wav_path, headers)
+    if not file_url:
+        return None
+
+    # 步骤 2: 创建识别任务
+    task_url = 'https://dashscope.aliyuncs.com/api/v1/services/async-transcription/v1/transcription-tasks'
+    task_data = {
+        'model': 'paraformer-v2',
+        'input': {'file_url': file_url},
+        'parameters': {'format': 'wav'}
+    }
+    task_resp = requests.post(task_url, json=task_data, headers=headers)
+
+    if task_resp.status_code != 200:
+        print(f"[千问语音识别] 创建任务失败：{task_resp.status_code} - {task_resp.text}")
+        return None
+
+    task_id = task_resp.json()['data']['task_id']
+    print(f"[千问语音识别] 任务 ID: {task_id}")
+
+    # 步骤 3: 轮询任务状态
+    max_wait = 60
+    start_time = time.time()
+
+    while time.time() - start_time < max_wait:
+        time.sleep(1)
+        status_url = f'{task_url}/{task_id}'
+        status_resp = requests.get(status_url, headers=headers)
+
+        if status_resp.status_code != 200:
+            continue
+
+        status_data = status_resp.json()
+        status = status_data['data']['task_status']
+
+        if status == 'SUCCEEDED':
+            output = status_data['data']['output']
+            if 'results' in output:
+                text = ' '.join(s.get('text', '') for s in output['results'])
+            elif 'text' in output:
+                text = output['text']
+            else:
+                text = ''
+            text = text.strip()
+            print(f"[千问语音识别] 识别结果：{text}")
+
+            # 清理临时文件
+            try:
+                os.unlink(wav_path)
+            except Exception:
+                pass
+            return text
+        elif status in ('FAILED', 'CANCELED'):
+            print(f"[千问语音识别] 任务失败：{status}")
+            break
+        else:
+            print(f"[千问语音识别] 当前状态：{status}，等待中...")
+
+    # 清理临时文件
+    try:
+        os.unlink(wav_path)
+    except Exception:
+        pass
+    return None
+
+
+def _upload_file_to_dashscope(wav_path, headers):
+    """上传文件到 DashScope OSS"""
+    import requests
+
+    # 获取上传 URL
+    upload_req_url = 'https://dashscope.aliyuncs.com/api/v1/uploads/request'
+    upload_data = {'name': 'asr_audio.wav', 'content_type': 'audio/wav'}
+    resp = requests.post(upload_req_url, json=upload_data, headers=headers)
+
+    if resp.status_code != 200:
+        print(f"[千问语音识别] 获取上传 URL 失败：{resp.status_code}")
+        return None
+
+    upload_info = resp.json()['data']
+    upload_url = upload_info['url']
+    object_key = upload_info['object_key']
+
+    # 上传文件
+    with open(wav_path, 'rb') as f:
+        audio_data = f.read()
+
+    put_resp = requests.put(upload_url, data=audio_data,
+                            headers={'Content-Type': 'audio/wav'})
+
+    if put_resp.status_code != 200:
+        print(f"[千问语音识别] 文件上传失败")
+        return None
+
+    return f"https://dashscope.oss.cn-beijing.aliyuncs.com/{object_key}"
 
 # ==================== LLM 调用 ====================
 
