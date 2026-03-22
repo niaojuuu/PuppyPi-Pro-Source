@@ -15,6 +15,17 @@ import struct
 import threading
 import serial
 import numpy as np
+import ctypes
+# 抑制 ALSA lib 的大量无关警告（Unknown PCM surround50/51/71 等）
+try:
+    _ERROR_HANDLER = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_int,
+                                       ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p)
+    def _alsa_error_handler(filename, line, function, err, fmt):
+        pass  # 静默所有 ALSA 错误消息
+    _alsa_err_cb = _ERROR_HANDLER(_alsa_error_handler)
+    ctypes.cdll.LoadLibrary('libasound.so.2').snd_lib_error_set_handler(_alsa_err_cb)
+except Exception:
+    pass
 import pyaudio
 import sherpa_onnx
 import rospy
@@ -32,12 +43,12 @@ print('''
 ----------------------------------------------------------
 唤醒词: "小幻小幻" (通过WonderEchoPro语音模块)
 语音识别: sherpa-onnx 本地ASR (中英双语)
-语言理解: 阿里云千问大模型 (qwen3.5-plus)
+语言理解: Anthropic Claude / 阿里云千问（通过环境变量切换）
 语音合成: sherpa-onnx 本地TTS (中文VITS)
 ----------------------------------------------------------
 Tips:
  * 按下Ctrl+C可关闭程序
- * 需设置环境变量: export DASHSCOPE_API_KEY="sk-xxxx"
+ * 需设置环境变量: export ANTHROPIC_API_KEY="sk-ant-xxxx"
  * 确保树莓派已联网
  * 确保 sherpa-onnx 模型文件存在于 ~/models/sherpa-onnx/
 ----------------------------------------------------------
@@ -111,19 +122,44 @@ SILENCE_THRESHOLD = 3000  # 能量阈值（根据实际底噪1064~2200调整）
 SILENCE_DURATION = 1.0   # 静音持续秒数触发结束
 MAX_RECORD_SECONDS = 6
 
-# LLM配置 - 阿里云DashScope
+# LLM配置 - 通过环境变量 LLM_PROVIDER 切换后端：claude(默认) 或 qwen
+LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'claude').lower()  # claude / qwen
+
+# Anthropic Claude 配置（支持 ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL 环境变量）
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', 'sk-kvlFi3r0OgZDQJsltslJTmNZYUI0eFVKEHcjEkxfH9OeS')
+ANTHROPIC_BASE_URL = os.environ.get('ANTHROPIC_BASE_URL', 'http://47.77.191.153:8317/v1/')
+CLAUDE_MODEL = 'claude-opus-4-6'  # 可选: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-6
+
+# 阿里云千问 配置
 DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', 'sk-4fe56ee3d9e44b248516ef93d95190f4')
-LLM_MODEL = 'qwen3.5-plus'  # 可选: qwen-turbo(最快最便宜), qwen-plus(性价比高), qwen-max(最强)
+QWEN_MODEL = 'qwen3.5-plus'  # 可选: qwen-turbo, qwen-plus, qwen-max
 
-if not DASHSCOPE_API_KEY:
-    print("[警告] 未设置 DASHSCOPE_API_KEY 环境变量！")
-    print("  请执行: export DASHSCOPE_API_KEY=\"sk-xxxx\"")
-    print("  获取地址: https://bailian.console.aliyun.com/")
+if LLM_PROVIDER == 'claude':
+    LLM_MODEL = CLAUDE_MODEL
+    LLM_API_KEY = ANTHROPIC_API_KEY
+    LLM_BASE_URL = ANTHROPIC_BASE_URL
+    LLM_EXTRA_BODY = None
+    if not ANTHROPIC_API_KEY:
+        print("[警告] 未设置 ANTHROPIC_API_KEY 环境变量！")
+        print("  请执行: export ANTHROPIC_API_KEY=\"sk-ant-xxxx\"")
+        print("  可通过 ANTHROPIC_BASE_URL 指定自定义端点")
+        print("  获取地址: https://console.anthropic.com/")
+else:
+    LLM_MODEL = QWEN_MODEL
+    LLM_API_KEY = DASHSCOPE_API_KEY
+    LLM_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+    LLM_EXTRA_BODY = {'enable_thinking': False, 'enable_search': False}
+    if not DASHSCOPE_API_KEY:
+        print("[警告] 未设置 DASHSCOPE_API_KEY 环境变量！")
+        print("  请执行: export DASHSCOPE_API_KEY=\"sk-xxxx\"")
+        print("  获取地址: https://bailian.console.aliyun.com/")
 
-# 初始化OpenAI客户端（兼容阿里云DashScope）
+print(f"[LLM] 使用后端: {LLM_PROVIDER}, 模型: {LLM_MODEL}")
+
+# 初始化OpenAI兼容客户端
 llm_client = OpenAI(
-    api_key=DASHSCOPE_API_KEY,
-    base_url='https://dashscope.aliyuncs.com/compatible-mode/v1',
+    api_key=LLM_API_KEY,
+    base_url=LLM_BASE_URL,
 )
 
 # 机器狗初始配置
@@ -436,7 +472,7 @@ def action_two_leg_stand():
     # 优先调用预制动作组文件
     if run_action_group_srv is not None:
         try:
-            run_action_group_srv('two_leg_stand.d6ac', True)
+            run_action_group_srv('2_legs_stand.d6ac', True)
             return
         except Exception as e:
             print(f"[两脚站立] 动作组调用失败({e})，使用姿态近似")
@@ -516,13 +552,20 @@ def action_find_object(target):
         return None
 
     def capture():
-        """等待并获取一帧，编码为 base64 JPEG"""
+        """停稳后获取清晰帧，编码为 base64 JPEG。
+        先丢弃缓冲中的旧帧（可能是运动中拍的模糊帧），等待新帧到来。
+        """
+        # 丢弃当前缓冲的旧帧
+        with image_lock:
+            latest_image[0] = None
+        # 等待一小段时间让新帧进来（摄像头通常30fps，约33ms一帧）
+        rospy.sleep(0.15)
         for _ in range(20):
             with image_lock:
                 frame = latest_image[0]
                 latest_image[0] = None
             if frame is not None:
-                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 return base64.b64encode(buf.tobytes()).decode('utf-8')
             rospy.sleep(0.1)
         return None
@@ -530,7 +573,7 @@ def action_find_object(target):
     def vision_query(b64, prompt):
         """调用视觉大模型，返回去除思考标签后的原始文本"""
         try:
-            resp = llm_client.chat.completions.create(
+            kwargs = dict(
                 model=LLM_MODEL,
                 messages=[{
                     'role': 'user',
@@ -541,8 +584,10 @@ def action_find_object(target):
                 }],
                 temperature=0.1,
                 max_tokens=120,
-                extra_body={'enable_thinking': False, 'enable_search': False},
             )
+            if LLM_EXTRA_BODY:
+                kwargs['extra_body'] = LLM_EXTRA_BODY
+            resp = llm_client.chat.completions.create(**kwargs)
             raw = resp.choices[0].message.content.strip()
             return re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
         except Exception as e:
@@ -627,7 +672,7 @@ def action_find_object(target):
             return 'turn_right', '解析异常'
 
     def move_safe(action, duration=1.5):
-        """带超声波实时避障的移动"""
+        """带超声波实时避障的移动，结束后等待机身稳定"""
         speed = BASE_SPEED * speed_factor
         if action == 'forward':
             dist = get_dist()
@@ -636,6 +681,7 @@ def action_find_object(target):
                 pub_vel(yaw_rate=-0.5)
                 rospy.sleep(0.8)
                 pub_vel()
+                rospy.sleep(0.3)  # 停稳
                 return
             pub_vel(x=speed)
             elapsed = 0.0
@@ -655,6 +701,72 @@ def action_find_object(target):
             pub_vel(yaw_rate=-0.5)
             rospy.sleep(duration)
             pub_vel()
+        # 停止后等待机身晃动稳定，避免拍照模糊
+        rospy.sleep(0.4)
+
+    def approach_target():
+        """发现目标后持续靠近，以视觉判断为主、超声波仅作防撞保护。
+        返回 True 表示成功靠近，False 表示靠近过程中丢失目标。
+        注意：超声波对矮小物体（离地<5cm）无法检测到，所以不能用它判断"到了"，
+        只用它在前方有大障碍物时紧急停止防撞。
+        """
+        APPROACH_MAX = 15  # 最大靠近轮次
+        SONAR_COLLISION_MM = 150  # 超声波防撞距离(mm)，仅防大障碍物碰撞
+        near_count = 0  # 连续视觉判断near的次数，连续2次确认贴近
+
+        print(f'[寻物] 进入靠近阶段，尝试尽可能接近目标...')
+        for step in range(APPROACH_MAX):
+            if not find_object_running or not run_st or rospy.is_shutdown():
+                return False
+
+            # 超声波仅作防撞：前方有大障碍物时停止前进，避免碰撞
+            dist = get_dist()
+            if dist is not None and dist < SONAR_COLLISION_MM:
+                print(f'[寻物] 超声波防撞：前方 {dist}mm 有障碍，停止靠近')
+                pub_vel()
+                return True
+
+            # 拍照确认目标仍在视野中
+            b64 = capture()
+            if not b64:
+                continue
+            found_flag, position, hint = check_target(b64)
+
+            if not found_flag:
+                print(f'[寻物] 靠近过程中目标丢失（第{step+1}步）')
+                pub_vel()
+                return False
+
+            if hint == 'near':
+                near_count += 1
+                if near_count >= 2:
+                    # 连续2次视觉确认贴近，可信度高
+                    print(f'[寻物] 视觉连续确认已贴近目标')
+                    pub_vel()
+                    return True
+                # 第1次near，再小步前进确认
+                print(f'[寻物] 视觉判断near（第{near_count}次），再小步确认...')
+                if position == 'left':
+                    move_safe('turn_left', 0.3)
+                elif position == 'right':
+                    move_safe('turn_right', 0.3)
+                move_safe('forward', 0.5)
+                rospy.sleep(0.2)
+                continue
+            else:
+                near_count = 0  # 非near则重置计数
+
+            # 目标仍在视野中但还不够近，调整方向并前进
+            if position == 'left':
+                move_safe('turn_left', 0.4)
+            elif position == 'right':
+                move_safe('turn_right', 0.4)
+            move_safe('forward', 1.0)
+            rospy.sleep(0.2)
+
+        print(f'[寻物] 靠近轮次用完，停止')
+        pub_vel()
+        return True
 
     # ======== 主搜寻循环 ========
     reset_pose()
@@ -688,9 +800,20 @@ def action_find_object(target):
                         'desc': f'正常视角远处发现目标({position})，已靠近'})
                     continue
                 else:
-                    # 近处确认找到，停下
-                    found = True
-                    break
+                    # 发现目标，进入靠近阶段
+                    print(f'[寻物] 发现目标（{position}, {hint}），开始靠近...')
+                    if position == 'left':
+                        move_safe('turn_left', 0.4)
+                    elif position == 'right':
+                        move_safe('turn_right', 0.4)
+                    if approach_target():
+                        found = True
+                        break
+                    else:
+                        # 靠近过程中丢失目标，继续搜寻
+                        search_history.append({'round': iteration + 1,
+                            'desc': f'正常视角发现目标({position})但靠近时丢失'})
+                        continue
 
         # --- 步骤2：正常视角未找到，由LLM决策下一步动作 ---
         b64_decision = b64 or capture()
@@ -724,9 +847,16 @@ def action_find_object(target):
                     elif position == 'right':
                         move_safe('turn_right', 0.6)
                     move_safe('forward', 2.0)
-                    search_history.append({'round': iteration + 1,
-                        'desc': f'动作=two_leg_stand，原因={reason}，高视角发现目标({position})已靠近'})
-                    continue
+                    # 高视角发现后也进入靠近阶段
+                    if approach_target():
+                        found = True
+                        search_history.append({'round': iteration + 1,
+                            'desc': f'动作=two_leg_stand，原因={reason}，高视角发现目标({position})已靠近'})
+                        break
+                    else:
+                        search_history.append({'round': iteration + 1,
+                            'desc': f'动作=two_leg_stand，原因={reason}，高视角发现目标({position})但靠近时丢失'})
+                        continue
             search_history.append({'round': iteration + 1,
                 'desc': f'动作=two_leg_stand，原因={reason}，高视角未发现'})
         else:
@@ -1316,22 +1446,24 @@ def record_and_recognize(recognizer):
     print(f"[录音+ASR] 完成, 时长: {duration:.1f}s, 识别结果: {text}")
     return text, duration
 
-# ==================== LLM 调用（阿里云千问） ====================
+# ==================== LLM 调用 ====================
 
 def call_llm(text):
-    """调用阿里云千问大模型理解意图"""
+    """调用大模型理解意图"""
     import re
     print(f"[LLM] 发送: {text}")
     try:
-        resp = llm_client.chat.completions.create(
+        kwargs = dict(
             model=LLM_MODEL,
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
                 {'role': 'user', 'content': text}
             ],
             temperature=0.3,
-            extra_body={'enable_thinking': False, 'enable_search': True},
         )
+        if LLM_EXTRA_BODY:
+            kwargs['extra_body'] = LLM_EXTRA_BODY
+        resp = llm_client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content
         print(f"[LLM] 原始返回: {content}")
 
