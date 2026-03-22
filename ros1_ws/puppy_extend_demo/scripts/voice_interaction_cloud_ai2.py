@@ -1269,8 +1269,10 @@ def find_usb_mic(pa):
         if 'USB' in info['name'] and info['maxInputChannels'] > 0:
             print(f"[麦克风] 使用设备：Index {i} - {info['name']}")
             return i
-    print("[麦克风] 未找到 USB 设备，使用默认设备")
-    return None
+    # 未找到 USB 设备，使用默认输入设备
+    default_device = pa.get_default_input_device_info()
+    print(f"[麦克风] 使用默认设备：Index {default_device['index']} - {default_device['name']}")
+    return default_device['index']
 
 # ==================== 录音 + 保存为 WAV ====================
 
@@ -1278,9 +1280,21 @@ def record_audio_wav():
     """录音并保存为 WAV 文件，返回文件路径"""
     pa = pyaudio.PyAudio()
     dev_index = find_usb_mic(pa)
-    mic_stream = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
-                         rate=MIC_SAMPLE_RATE, input=True,
-                         input_device_index=dev_index, frames_per_buffer=MIC_CHUNK)
+
+    try:
+        mic_stream = pa.open(format=pyaudio.paInt16, channels=CHANNELS,
+                             rate=MIC_SAMPLE_RATE, input=True,
+                             input_device_index=dev_index, frames_per_buffer=MIC_CHUNK)
+    except Exception as e:
+        print(f"[麦克风] 打开失败：{e}")
+        # 列出所有可用输入设备
+        print("[麦克风] 可用输入设备:")
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            if info['maxInputChannels'] > 0:
+                print(f"  Index {i}: {info['name']} (channels={info['maxInputChannels']})")
+        pa.terminate()
+        raise
     print("[录音] 开始录音...")
 
     silence_chunks = 0
