@@ -1361,17 +1361,13 @@ def recognize_speech_with_qwen(wav_path):
 
     try:
         # 使用 dashscope SDK 调用语音识别
-        try:
-            from dashscope import AudioTranscription
-        except ImportError:
-            print("[千问语音识别] 未安装 dashscope 库，请运行：pip install dashscope")
-            return None
+        import dashscope
 
-        # 使用 Paraformer 模型进行语音识别
-        # 文件上传和识别是自动处理的
-        result = AudioTranscription.call(
-            model='paraformer-turbo-v2',
-            file=wav_path
+        # 使用 Paraformer 模型进行语音识别（文件上传方式）
+        result = dashscope.AudioTranscription.call(
+            model='paraformer-v2',
+            format='wav',
+            file_path=wav_path
         )
 
         if result.status_code == 200:
