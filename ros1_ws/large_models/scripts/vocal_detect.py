@@ -11,6 +11,7 @@ from std_msgs.msg import Int32, String
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
 from speech import speech
 from config import *
+from voiceprint import VoicePrint
 from large_models.srv import SetInt32, SetInt32Response
 
 # 定义日志包装器类
@@ -53,8 +54,15 @@ class VocalDetect(object):
         else:
             self.vad = speech.Vad(voiced_confidence, silence_seconds_begin, record_seconds, silence_ratio)
         
-        self.asr = speech.ASR(asr_api_key, asr_secret_key, asr_cuid) 
-        
+        self.asr = speech.ASR(asr_api_key, asr_secret_key, asr_cuid)
+
+        # 初始化声纹验证
+        self.voiceprint = VoicePrint(owner_embedding_path, threshold=voiceprint_threshold)
+        if self.voiceprint.is_enrolled():
+            rospy.loginfo('\033[1;32m%s\033[0m' % '已加载主人声纹')
+        else:
+            rospy.logwarn('未找到主人声纹文件，将跳过声纹验证')
+
         # 创建发布者
         self.asr_pub = rospy.Publisher('~asr_result', String, queue_size=1)
         self.awake_angle_pub = rospy.Publisher('~angle', Int32, queue_size=1)
@@ -86,6 +94,21 @@ class VocalDetect(object):
             asr_result = self.asr.asr(recording_audio_path)  # 识别录音
             if asr_result:
                 speech.play_audio(dong_audio_path)
+
+                # 声纹验证
+                if self.voiceprint.is_enrolled():
+                    is_match, confidence = self.voiceprint.verify(recording_audio_path)
+                    if not is_match:
+                        rospy.logwarn('声纹验证不通过 (相似度: %.4f)，拒绝执行命令' % confidence)
+                        speech.play_audio(not_owner_audio_path)
+                        # 重新启用唤醒检测
+                        if self.awake_method == 'xf':
+                            # self.kws.start()
+                            pass
+                        else:
+                            self.kws.start()
+                        return
+
                 if self.awake_method == 'xf' and self.mode == 1:
                     msg = Int32()
                     msg.data = int(angle)

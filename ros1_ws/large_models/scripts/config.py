@@ -44,3 +44,9 @@ no_voice_audio_path = os.path.join(code_path, 'resources/audio', "no_voice.wav")
 
 # 录音完成时音频的路径
 dong_audio_path = os.path.join(code_path, 'resources/audio', "dong.wav")
+
+# 声纹相关
+voiceprint_dir = os.path.join(code_path, 'resources', 'voiceprint')
+owner_embedding_path = os.path.join(voiceprint_dir, 'owner_embedding.npy')
+voiceprint_threshold = 0.7  # 声纹匹配阈值（0~1），越高越严格
+not_owner_audio_path = os.path.join(code_path, 'resources', 'audio', 'not_owner.wav')
