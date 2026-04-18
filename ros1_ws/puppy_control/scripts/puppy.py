@@ -54,12 +54,12 @@ PuppyPose = LieDown.copy()
 # pitch： 狗身体的俯仰角，单位弧度
 
 
-GaitConfigFast = {'overlap_time':0.1, 'swing_time':0.15, 'clearance_time':0.0, 'z_clearance':5}
+GaitConfigFast = {'overlap_time':0.08, 'swing_time':0.1, 'clearance_time':0.0, 'z_clearance':4}
 # 快速
 
 GaitConfigSlow = {'overlap_time':0.4, 'swing_time':0.3, 'clearance_time':0.26, 'z_clearance':4}
 # 慢速
-GaitConfigMarkTime = {'overlap_time':0.2, 'swing_time':0.1, 'clearance_time':0.0, 'z_clearance':5}
+GaitConfigMarkTime = {'overlap_time':0.2, 'swing_time':0.1, 'clearance_time':0.0, 'z_clearance':4}
 # GaitConfig = {'overlap_time':0.1, 'swing_time':0.1, 'clearance_time':0.0, 'z_clearance':4}
 # GaitConfigMarkTime = {'overlap_time':0.2, 'swing_time':0.1, 'clearance_time':0.0, 'z_clearance':4}
 # GaitConfigCrawl = {'overlap_time':0.4, 'swing_time':0.3, 'clearance_time':0.20, 'z_clearance':4}
@@ -268,7 +268,7 @@ class PUPPY():
             self.puppy.stance_config(self.stance(PuppyPose['stance_x'],PuppyPose['stance_y'],PuppyPose['height'],PuppyPose['x_shift']), PuppyPose['pitch'], PuppyPose['roll'])
 
             if abs(msg.linear.x) > abs(msg.angular.z):
-                self.VelocityFun(Velocity(16*np.sign(msg.linear.x),0,0))
+                self.VelocityFun(Velocity(25*np.sign(msg.linear.x),0,0))
             else:
                 self.VelocityFun(Velocity(0,0,np.radians(25)*np.sign(msg.angular.z)))
         elif msg.linear.x == 0 and msg.angular.z == 0:
@@ -298,31 +298,31 @@ class PUPPY():
         elif msg.x ==0 and msg.y == 0 and msg.yaw_rate == 0:
             self.puppy.move_stop(servo_run_time = 100)
             self.puppy.stance_config(self.stance(PuppyPose['stance_x'],PuppyPose['stance_y'],PuppyPose['height'],PuppyPose['x_shift']), PuppyPose['pitch'], PuppyPose['roll'])
-        elif abs(msg.x) <= 35 and abs(msg.y) == 0 and abs(msg.yaw_rate) <= np.radians(51):
+        elif abs(msg.x) <= 50 and abs(msg.y) == 0 and abs(msg.yaw_rate) <= np.radians(51):
             if msg.x > 0:
                 self.puppy.stance_config(self.stance(PuppyPose['stance_x'],PuppyPose['stance_y'],PuppyPose['height'],PuppyPose['x_shift']-0.8), PuppyPose['pitch'], PuppyPose['roll'])
             else:
                 self.puppy.stance_config(self.stance(PuppyPose['stance_x'],PuppyPose['stance_y'],PuppyPose['height'],PuppyPose['x_shift']+0.8), PuppyPose['pitch'], PuppyPose['roll'])
-            
+
             self.puppy.move(x=msg.x, y=msg.y, yaw_rate = msg.yaw_rate)
-            
+
     def VelocityAutogaitFun(self, msg):
         rospy.logdebug(msg)
         if msg.x ==0 and msg.y == 0 and msg.yaw_rate == 0:
             self.puppy.move_stop(servo_run_time = 100)
             self.puppy.stance_config(self.stance(PuppyPose['stance_x'],PuppyPose['stance_y'],PuppyPose['height'],PuppyPose['x_shift']), PuppyPose['pitch'], PuppyPose['roll'])
-        elif abs(msg.x) <= 35 and abs(msg.y) == 0 and abs(msg.yaw_rate) <= np.radians(51):
-            if abs(msg.x) <= 10:
+        elif abs(msg.x) <= 50 and abs(msg.y) == 0 and abs(msg.yaw_rate) <= np.radians(51):
+            if abs(msg.x) <= 8:
                 overlap_time_x = 0.45 - abs(msg.x) * 0.023
                 swing_time_x = 0.38 - abs(msg.x) * 0.0154
                 clearance_time_x = swing_time_x - 0.04
-            elif abs(msg.x) <= 15:
+            elif abs(msg.x) <= 12:
                 overlap_time_x = 0.45 - abs(msg.x) * 0.023
                 swing_time_x = 0.38 - abs(msg.x) * 0.0154
                 clearance_time_x = 0
             else:
-                overlap_time_x = 0.1
-                swing_time_x = 0.15
+                overlap_time_x = 0.08
+                swing_time_x = 0.1
                 clearance_time_x = 0
             #if msg.yaw_rate > 0: msg.yaw_rate = np.radians(20)
             #elif msg.yaw_rate < 0:msg.yaw_rate = np.radians(-20)
