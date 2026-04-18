@@ -469,14 +469,13 @@ def action_hello():
 def action_two_leg_stand():
     """两脚站立（后腿直立）- 通过代码编排尽可能站高站稳，获取更多摄像头视野"""
     global run_action_group_srv
-    # 优先调用预制动作组文件
+    # 优先调用预制动作组文件（直接控制舵机，不受 Pose pitch ±31° 限制）
     if run_action_group_srv is not None:
         try:
             run_action_group_srv('2_legs_stand.d6ac', True)
             return
         except Exception as e:
             print(f"[两脚站立] 动作组调用失败({e})，使用姿态近似")
-
     # puppy.py PoseFun 限制: |pitch|<=31°, -15<=height<=-5,
     #   |stance_x|<=5, |stance_y|<=5, |x_shift|<=10
     # 策略: 分步渐进——先降重心、展开后腿增稳，再逐步后移重心+仰角抬升前身
