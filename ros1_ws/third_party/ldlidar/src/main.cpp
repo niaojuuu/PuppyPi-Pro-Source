@@ -27,8 +27,6 @@ int main(int argc , char **argv)
             port_name = n.first;
         }
     }
-	//port_name = "/dev/ttyAMA0";
-	port_name = "/dev/ttyUSB0";
 	if(port_name.empty())
 	{
 		std::cout<<"Can't find LiDAR LD06"<< std::endl;

@@ -1602,22 +1602,18 @@ def execute_actions(action_list):
 def init_serial():
     """初始化串口（自动检测端口）"""
     port = find_serial_port()
-
-    # 先以 dtr=False 打开，避免 pyserial 默认拉高 DTR 导致语音盒复位
     ser = serial.Serial(
         port=port,
         baudrate=SERIAL_BAUD,
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
-        timeout=0.02,
-        dsrdtr=False,
+        timeout=0.02
     )
-    ser.dtr = False
     ser.rts = False
+    ser.dtr = False
 
-    # 等待语音盒固件就绪（开机时设备节点先出现，但固件可能未初始化完成）
-    time.sleep(0.5)
+    time.sleep(0.1)
     while ser.in_waiting > 0:
         ser.read(ser.in_waiting)
 
