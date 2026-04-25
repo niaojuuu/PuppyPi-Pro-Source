@@ -1361,13 +1361,14 @@ def recognize_speech_with_qwen(wav_path):
 
     try:
         import dashscope
-        from dashscope.audio.asr import Recognition
+        from dashscope.audio.asr import Recognition, RecognitionCallback
 
         dashscope.api_key = DASHSCOPE_API_KEY
 
         # Recognition.call() 直接支持本地文件，无需上传
         recognition = Recognition(
             model='paraformer-realtime-v2',
+            callback=RecognitionCallback(),
             format='wav',
             sample_rate=MIC_SAMPLE_RATE,
         )
