@@ -1360,60 +1360,43 @@ def recognize_speech_with_qwen(wav_path):
     print("[千问语音识别] 开始识别...")
 
     try:
-        from dashscope.audio.asr import Transcription
         import dashscope
+        from dashscope.audio.asr import Recognition
 
         dashscope.api_key = DASHSCOPE_API_KEY
 
-        # 上传本地文件获取 URL
-        from dashscope import fileapi
-        file_resp = fileapi.upload(file_path=wav_path, purpose="file-extract")
-        file_url = file_resp.data.uploaded_filepath
-        print(f"[千问语音识别] 文件已上传：{file_url}")
-
-        # 提交异步转写任务
-        task_response = Transcription.async_call(
-            model='paraformer-v2',
-            file_urls=[file_url],
-            language_hints=['zh'],
+        # Recognition.call() 直接支持本地文件，无需上传
+        recognition = Recognition(
+            model='paraformer-realtime-v2',
+            format='wav',
+            sample_rate=MIC_SAMPLE_RATE,
         )
-        task_id = task_response.output.task_id
-        print(f"[千问语音识别] 任务 ID: {task_id}")
+        result = recognition.call(file=wav_path)
 
-        # 轮询等待结果
-        for _ in range(60):
-            time.sleep(1)
-            result = Transcription.fetch(task=task_id)
-            status = result.output.task_status
-            if status == 'SUCCEEDED':
-                # 下载并解析转写结果
-                import requests
-                transcription_url = result.output.results[0]['transcription_url']
-                resp = requests.get(transcription_url)
-                data = resp.json()
-                sentences = data.get('Transcription', {}).get('Sentences', [])
-                text = ' '.join(s.get('Text', '') for s in sentences).strip()
-                print(f"[千问语音识别] 识别结果：{text}")
-                try:
-                    os.unlink(wav_path)
-                except Exception:
-                    pass
-                return text
-            elif status in ('FAILED', 'CANCELED'):
-                print(f"[千问语音识别] 任务失败：{status}")
-                break
-            print(f"[千问语音识别] 状态：{status}...")
+        sentences = result.get_sentence()
+        if sentences:
+            text = ''.join(
+                s.get('text', '') for s in sentences
+                if isinstance(s, dict)
+            ).strip()
+            print(f"[千问语音识别] 识别结果：{text}")
+        else:
+            print("[千问语音识别] 未识别到内容")
+            text = None
 
         try:
             os.unlink(wav_path)
         except Exception:
             pass
-        return None
+        return text
 
     except ImportError:
-        # dashscope 版本太旧，使用 HTTP API 直接调用
-        print("[千问语音识别] SDK 不可用，使用 HTTP API 调用...")
-        return recognize_speech_with_http(wav_path)
+        print("[千问语音识别] dashscope SDK 不可用")
+        try:
+            os.unlink(wav_path)
+        except Exception:
+            pass
+        return None
 
     except Exception as e:
         print(f"[千问语音识别] 错误：{e}")
@@ -1424,86 +1407,6 @@ def recognize_speech_with_qwen(wav_path):
         except Exception:
             pass
         return None
-
-
-def recognize_speech_with_http(wav_path):
-    """使用 HTTP API 调用阿里云语音识别（备用方案）"""
-    import requests
-    import time
-
-    api_key = DASHSCOPE_API_KEY
-    headers = {'Authorization': f'Bearer {api_key}'}
-
-    # 上传本地文件到 DashScope
-    upload_url = 'https://dashscope.aliyuncs.com/api/v1/uploads'
-    with open(wav_path, 'rb') as f:
-        files = {'file': ('audio.wav', f, 'audio/wav')}
-        data = {'purpose': 'file-extract'}
-        resp = requests.post(upload_url, files=files, data=data, headers=headers)
-
-    if resp.status_code != 200:
-        print(f"[千问语音识别] 上传文件失败：{resp.status_code} - {resp.text}")
-        try:
-            os.unlink(wav_path)
-        except:
-            pass
-        return None
-
-    file_url = resp.json()['data']['uploaded_filepath']
-    print(f"[千问语音识别] 文件已上传：{file_url}")
-
-    # 创建转写任务
-    task_url = 'https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription'
-    task_data = {
-        'model': 'paraformer-v2',
-        'input': {'file_urls': [file_url]},
-        'parameters': {'language_hints': ['zh']},
-    }
-    task_resp = requests.post(task_url, json=task_data,
-                              headers={**headers, 'X-DashScope-Async': 'enable'})
-
-    if task_resp.status_code != 200:
-        print(f"[千问语音识别] 创建任务失败：{task_resp.status_code} - {task_resp.text}")
-        try:
-            os.unlink(wav_path)
-        except:
-            pass
-        return None
-
-    task_id = task_resp.json()['output']['task_id']
-    print(f"[千问语音识别] 任务 ID: {task_id}")
-
-    # 轮询结果
-    for _ in range(60):
-        time.sleep(1)
-        status_url = f'https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}'
-        status_resp = requests.get(status_url, headers=headers)
-        if status_resp.status_code != 200:
-            continue
-        status = status_resp.json()['output']['task_status']
-        if status == 'SUCCEEDED':
-            results = status_resp.json()['output']['results']
-            transcription_url = results[0]['transcription_url']
-            resp = requests.get(transcription_url)
-            data = resp.json()
-            sentences = data.get('Transcription', {}).get('Sentences', [])
-            text = ' '.join(s.get('Text', '') for s in sentences).strip()
-            print(f"[千问语音识别] 识别结果：{text}")
-            try:
-                os.unlink(wav_path)
-            except:
-                pass
-            return text
-        elif status in ('FAILED', 'CANCELED'):
-            print(f"[千问语音识别] 任务失败：{status}")
-            break
-        print(f"[千问语音识别] 状态：{status}...")
-
-    try:
-        os.unlink(wav_path)
-    except:
-        pass
-    return None
 
 # ==================== LLM 调用 ====================
 
