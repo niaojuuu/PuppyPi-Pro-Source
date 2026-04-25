@@ -1,0 +1,21 @@
+<launch>
+    <!-- 原有依赖：控制器、参数加载、web视频、rosbridge -->
+    <include file="$(find ros_robot_controller)/launch/ros_robot_controller_node.launch" />
+    <include file="$(find puppy_bringup)/launch/start_dependence.launch" />
+
+    <!-- 原有前视摄像头（固定，/dev/video0） -->
+    <include file="$(find puppy_bringup)/launch/usb_cam.launch" />
+
+    <!-- 新增云台摄像头（可360°旋转，/dev/video1） -->
+    <include file="$(find puppy_bringup)/launch/usb_cam_surround.launch" />
+
+    <!-- 机器狗运动控制 -->
+    <include file="$(find puppy_bringup)/launch/start_puppy_control.launch"/>
+
+    <!-- 视觉功能节点 -->
+    <include file="$(find puppy_bringup)/launch/start_functions.launch" />
+
+    <!-- 云台控制节点 -->
+    <node name="camera_pan_tilt" pkg="puppy_extend_demo" type="camera_pan_tilt.py" output="screen" />
+
+</launch>
