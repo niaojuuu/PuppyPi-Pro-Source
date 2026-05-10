@@ -1,12 +1,18 @@
 <launch>
-   
+
     <include file="$(find ros_robot_controller)/launch/ros_robot_controller_node.launch" />
     <include file="$(find puppy_bringup)/launch/start_dependence.launch" />
 
     <include file="$(find puppy_bringup)/launch/usb_cam.launch" />
 
+    <!-- 云台摄像头 -->
+    <include file="$(find puppy_bringup)/launch/usb_cam_surround.launch" />
+
     <include file="$(find puppy_bringup)/launch/start_puppy_control.launch"/>
 
     <include file="$(find puppy_bringup)/launch/start_functions.launch" />
-    
+
+    <!-- 云台控制节点 -->
+    <node name="camera_pan_tilt" pkg="puppy_extend_demo" type="camera_pan_tilt.py" output="screen" />
+
 </launch>
