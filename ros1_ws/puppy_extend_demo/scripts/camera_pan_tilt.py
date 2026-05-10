@@ -19,7 +19,8 @@ PAN_SERVO_ID = 9    # 水平旋转（连续旋转舵机，PWM端口9）
 TILT_SERVO_ID = None # 俯仰暂未接入，后续接入后改为对应PWM端口号
 
 # 连续旋转舵机标定参数（需实测校准）
-PAN_SPEED_DEG_PER_SEC = 108.0  # 舵机在0.3速度下的旋转速率，单位：度/秒
+# 标定方法：以0.3速度旋转5秒，测量实际转过的角度，用角度÷5得到此值
+PAN_SPEED_DEG_PER_SEC = 30.0  # 舵机在0.3速度下的旋转速率，单位：度/秒（初始估计值，需实测校准）
 
 board = Board()
 psc = PWMServoControl(board)
@@ -63,7 +64,7 @@ def sweep_scan(steps=12):
     angle_per_step = 360.0 / steps
     rotate_time = angle_per_step / PAN_SPEED_DEG_PER_SEC  # 每步旋转所需时间
 
-    rospy.loginfo("开始360°扫描，共%d步，每步%.1f°", steps, angle_per_step)
+    rospy.loginfo("开始360°扫描，共%d步，每步%.1f°，每步转%.2f秒", steps, angle_per_step, rotate_time)
 
     for i in range(steps):
         rospy.loginfo("扫描步骤 %d/%d", i + 1, steps)
@@ -71,7 +72,6 @@ def sweep_scan(steps=12):
         time.sleep(rotate_time)           # 旋转一步的角度
         stop_pan()                        # 停止
         time.sleep(0.5)                   # 等待画面稳定
-        # 此处可扩展：抓取图像并保存/发布
 
     rospy.loginfo("360°扫描完成")
 
