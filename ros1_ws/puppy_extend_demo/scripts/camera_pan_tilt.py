@@ -12,7 +12,8 @@ import threading
 sys.path.append('/home/ubuntu/software/puppypi_control')
 from ros_robot_controller_sdk import Board
 from pwm_servo_control import PWMServoControl
-from std_srvs.srv import SetFloat64, SetFloat64Response, Trigger, TriggerResponse
+from std_msgs.msg import Float32
+from std_srvs.srv import Trigger, TriggerResponse
 
 PAN_SERVO_ID = 9    # 水平旋转（连续旋转舵机，PWM端口9）
 TILT_SERVO_ID = None # 俯仰暂未接入，后续接入后改为对应PWM端口号
@@ -75,20 +76,18 @@ def sweep_scan(steps=12):
     rospy.loginfo("360°扫描完成")
 
 
-# ============ ROS1 服务回调 ============
+# ============ ROS1 回调 ============
 
-def set_pan_speed_cb(req):
-    speed = max(-1.0, min(1.0, req.data))
+def pan_speed_cb(msg):
+    speed = max(-1.0, min(1.0, msg.data))
     set_pan_speed(speed)
     rospy.loginfo("Pan speed set to %.2f", speed)
-    return SetFloat64Response(success=True, message="pan speed set to %.2f" % speed)
 
 
-def set_tilt_angle_cb(req):
-    angle = max(0.0, min(180.0, req.data))
+def tilt_angle_cb(msg):
+    angle = max(0.0, min(180.0, msg.data))
     set_tilt_angle(angle)
     rospy.loginfo("Tilt angle set to %.1f", angle)
-    return SetFloat64Response(success=True, message="tilt angle set to %.1f" % angle)
 
 
 def sweep_cb(req):
@@ -116,18 +115,21 @@ if __name__ == '__main__':
 
     init_pan_tilt()
 
+    # 订阅话题
+    rospy.Subscriber('/camera_pan_tilt/pan_speed', Float32, pan_speed_cb)
+    rospy.Subscriber('/camera_pan_tilt/tilt_angle', Float32, tilt_angle_cb)
+
     # 注册ROS服务
-    rospy.Service('/camera_pan_tilt/set_pan_speed', SetFloat64, set_pan_speed_cb)
-    rospy.Service('/camera_pan_tilt/set_tilt_angle', SetFloat64, set_tilt_angle_cb)
     rospy.Service('/camera_pan_tilt/sweep', Trigger, sweep_cb)
     rospy.Service('/camera_pan_tilt/stop', Trigger, stop_cb)
 
     rospy.loginfo("camera_pan_tilt 节点已启动")
+    rospy.loginfo("话题接口:")
+    rospy.loginfo("  /camera_pan_tilt/pan_speed     (Float32: -1.0~1.0)")
+    rospy.loginfo("  /camera_pan_tilt/tilt_angle    (Float32: 0~180, 暂未接入)")
     rospy.loginfo("服务接口:")
-    rospy.loginfo("  /camera_pan_tilt/set_pan_speed  (float: -1.0~1.0)")
-    rospy.loginfo("  /camera_pan_tilt/set_tilt_angle (float: 0~180, 暂未接入)")
-    rospy.loginfo("  /camera_pan_tilt/sweep          (触发360°扫描)")
-    rospy.loginfo("  /camera_pan_tilt/stop           (停止Pan)")
+    rospy.loginfo("  /camera_pan_tilt/sweep         (触发360°扫描)")
+    rospy.loginfo("  /camera_pan_tilt/stop          (停止Pan)")
 
     rospy.on_shutdown(stop_pan)
 
