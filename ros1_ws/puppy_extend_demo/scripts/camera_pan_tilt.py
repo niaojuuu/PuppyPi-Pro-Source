@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # coding=utf8
 # 云台摄像头控制节点（Pan-Tilt Camera Control）
-# Pan: FS90R 连续旋转舵机 (ID 12)，控制水平360°旋转
-# Tilt: Hiwonder 空心杯舵机 (ID 13)，控制俯仰角度
+# Pan: FS90R 连续旋转舵机 (PWM端口 9)，控制水平360°旋转
+# Tilt: 暂未接入
 
 import sys
 import time
@@ -14,8 +14,8 @@ from ros_robot_controller_sdk import Board
 from pwm_servo_control import PWMServoControl
 from std_srvs.srv import SetFloat64, SetFloat64Response, Trigger, TriggerResponse
 
-PAN_SERVO_ID = 12   # 水平旋转（连续旋转舵机）
-TILT_SERVO_ID = 13  # 俯仰（标准空心杯舵机）
+PAN_SERVO_ID = 9    # 水平旋转（连续旋转舵机，PWM端口9）
+TILT_SERVO_ID = None # 俯仰暂未接入，后续接入后改为对应PWM端口号
 
 # 连续旋转舵机标定参数（需实测校准）
 PAN_SPEED_DEG_PER_SEC = 108.0  # 舵机在0.3速度下的旋转速率，单位：度/秒
@@ -43,9 +43,12 @@ def stop_pan():
 
 
 def set_tilt_angle(angle):
-    """设置俯仰角度
+    """设置俯仰角度（俯仰舵机暂未接入）
     angle: 0°(向上最大) ~ 90°(水平) ~ 180°(向下最大)
     """
+    if TILT_SERVO_ID is None:
+        rospy.logwarn("俯仰舵机未接入，忽略 tilt 指令")
+        return
     with lock:
         pulse = int(500 + angle / 180.0 * 2000)
         pulse = max(500, min(2500, pulse))
@@ -95,20 +98,17 @@ def sweep_cb(req):
 
 def stop_cb(req):
     stop_pan()
-    set_tilt_angle(90)
-    rospy.loginfo("Pan-tilt reset to home position")
-    return TriggerResponse(success=True, message="pan-tilt stopped and reset")
+    rospy.loginfo("Pan stopped")
+    return TriggerResponse(success=True, message="pan stopped")
 
 
 # ============ 主函数 ============
 
 def init_pan_tilt():
     """初始化云台到默认位置"""
-    rospy.loginfo("初始化云台：Pan停止，Tilt水平(90°)")
+    rospy.loginfo("初始化云台：Pan停止")
     stop_pan()
     time.sleep(0.2)
-    set_tilt_angle(90)
-    time.sleep(0.5)
 
 
 if __name__ == '__main__':
@@ -125,10 +125,10 @@ if __name__ == '__main__':
     rospy.loginfo("camera_pan_tilt 节点已启动")
     rospy.loginfo("服务接口:")
     rospy.loginfo("  /camera_pan_tilt/set_pan_speed  (float: -1.0~1.0)")
-    rospy.loginfo("  /camera_pan_tilt/set_tilt_angle (float: 0~180)")
+    rospy.loginfo("  /camera_pan_tilt/set_tilt_angle (float: 0~180, 暂未接入)")
     rospy.loginfo("  /camera_pan_tilt/sweep          (触发360°扫描)")
-    rospy.loginfo("  /camera_pan_tilt/stop           (停止并复位)")
+    rospy.loginfo("  /camera_pan_tilt/stop           (停止Pan)")
 
-    rospy.on_shutdown(lambda: (stop_pan(), set_tilt_angle(90)))
+    rospy.on_shutdown(stop_pan)
 
     rospy.spin()
