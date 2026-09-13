@@ -15,4 +15,7 @@
     <!-- 云台控制节点 -->
     <node name="camera_pan_tilt" pkg="puppy_extend_demo" type="camera_pan_tilt.py" output="screen" />
 
+    <!-- 云端 AI 语音交互节点 -->
+    <node name="voice_interaction_cloud_ai2" pkg="puppy_extend_demo" type="voice_interaction_cloud_ai2.py" output="screen" />
+
 </launch>
