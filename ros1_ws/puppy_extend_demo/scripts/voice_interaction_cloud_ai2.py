@@ -35,6 +35,7 @@ import sherpa_onnx
 import rospy
 from openai import OpenAI
 from std_msgs.msg import *
+from std_srvs.srv import Trigger, TriggerResponse
 from puppy_control.msg import Velocity, Pose, Gait
 from puppy_control.srv import SetRunActionName
 from ros_robot_controller.msg import RGBState, RGBsState
@@ -155,6 +156,9 @@ PuppyGaitConfigPub = None
 PuppyVelocityPub = None
 RGBPub = None
 run_action_group_srv = None
+PanTiltPanSpeedPub = None
+PanTiltSweepSrv = None
+PanTiltStopSrv = None
 tts_engine = None
 find_object_running = False
 
@@ -479,6 +483,51 @@ def action_two_leg_stand():
     PuppyPosePub.publish(stance_x=0, stance_y=3, x_shift=7.0,
         height=-13, roll=math.radians(0), pitch=math.radians(-30), yaw=0, run_time=600)
     rospy.sleep(0.8)
+
+# ==================== 云台摄像头控制 ====================
+
+def action_camera_look_left():
+    """摄像头左看：低速左转约30°后停止"""
+    if PanTiltPanSpeedPub is None:
+        print('[云台] 未初始化，跳过')
+        return
+    PanTiltPanSpeedPub.publish(-0.3)   # 负值=逆时针=左
+    rospy.sleep(1.0)                  # 30°/s × 1s ≈ 30°
+    PanTiltPanSpeedPub.publish(0.0)    # 停止
+
+def action_camera_look_right():
+    """摄像头右看：低速右转约30°后停止"""
+    if PanTiltPanSpeedPub is None:
+        print('[云台] 未初始化，跳过')
+        return
+    PanTiltPanSpeedPub.publish(0.3)    # 正值=顺时针=右
+    rospy.sleep(1.0)
+    PanTiltPanSpeedPub.publish(0.0)
+
+def action_camera_sweep():
+    """摄像头环顾四周：360°全景扫描（调用 camera_pan_tilt 节点的服务）"""
+    if PanTiltSweepSrv is None:
+        print('[云台] sweep 服务不可用')
+        return
+    try:
+        resp = PanTiltSweepSrv()
+        print(f'[云台] 扫描完成：{resp.message}')
+    except Exception as e:
+        print(f'[云台] sweep 调用失败：{e}')
+
+def action_camera_stop():
+    """摄像头停止旋转"""
+    if PanTiltStopSrv is None and PanTiltPanSpeedPub is None:
+        print('[云台] 未初始化')
+        return
+    if PanTiltStopSrv is not None:
+        try:
+            PanTiltStopSrv()
+        except Exception as e:
+            print(f'[云台] stop 服务失败：{e}，改用话题')
+            PanTiltPanSpeedPub.publish(0.0)
+    else:
+        PanTiltPanSpeedPub.publish(0.0)
 
 # ==================== 跟随模式（摄像头人体检测） ====================
 follow_thread = None
@@ -1179,6 +1228,10 @@ ACTION_MAP = {
     'stop_follow()': action_stop_follow,
     'two_leg_stand()': action_two_leg_stand,
     'stop_find()': action_stop_find,
+    'camera_look_left()': action_camera_look_left,
+    'camera_look_right()': action_camera_look_right,
+    'camera_sweep()': action_camera_sweep,
+    'camera_stop()': action_camera_stop,
 }
 
 # ==================== 关键词快速匹配（短路 LLM） ====================
@@ -1205,6 +1258,10 @@ KEYWORD_RULES = [
     (['握手', '握个手'], ['shake_hands()'], '你好你好'),
     (['走两步', '走几步'], ['walk_steps()'], '走给你看'),
     (['两脚站立', '后腿站立', '用两脚站', '用两条腿站', '后腿站'], ['two_leg_stand()'], '好的，用两条后腿站起来'),
+    (['左看', '看左边', '往左看', '摄像头左看', '向左看', '头往左'], ['camera_look_left()'], '好的，往左看'),
+    (['右看', '看右边', '往右看', '摄像头右看', '向右看', '头往右'], ['camera_look_right()'], '好的，往右看'),
+    (['环顾四周', '环顾', '扫一圈', '扫视', '看一圈', '四周看看'], ['camera_sweep()'], '我看看四周'),
+    (['摄像头停下', '摄像头停', '停止摄像头', '停摄像头'], ['camera_stop()'], '摄像头停了'),
 ]
 
 def keyword_match(text):
@@ -1220,7 +1277,7 @@ def keyword_match(text):
 
 SYSTEM_PROMPT = '''你是机器狗，根据用户指令输出 JSON。严格只输出 JSON，不要输出其他内容。
 格式：{"action":["函数名"],"response":"简短回复"}
-可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find()
+可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find() camera_look_left() camera_look_right() camera_sweep() camera_stop()
 注意：find_object 的物品名用单引号括起来，如 find_object('水杯')
 示例：
 用户：往前走两步
@@ -1558,6 +1615,7 @@ def play_wakeup_reply(tts_engine):
 
 def main():
     global PuppyPosePub, PuppyGaitConfigPub, PuppyVelocityPub, RGBPub, run_action_group_srv
+    global PanTiltPanSpeedPub, PanTiltSweepSrv, PanTiltStopSrv
 
     rospy.init_node('voice_interaction_cloud_ai2')
     rospy.on_shutdown(Stop)
@@ -1566,8 +1624,18 @@ def main():
     PuppyGaitConfigPub = rospy.Publisher('/puppy_control/gait', Gait, queue_size=1)
     PuppyVelocityPub = rospy.Publisher('/puppy_control/velocity', Velocity, queue_size=1)
     RGBPub = rospy.Publisher('/ros_robot_controller/set_rgb', RGBsState, queue_size=1)
+    PanTiltPanSpeedPub = rospy.Publisher('/camera_pan_tilt/pan_speed', Float32, queue_size=1)
 
     rospy.sleep(0.5)
+
+    try:
+        rospy.wait_for_service('/camera_pan_tilt/sweep', timeout=3.0)
+        PanTiltSweepSrv = rospy.ServiceProxy('/camera_pan_tilt/sweep', Trigger)
+        rospy.wait_for_service('/camera_pan_tilt/stop', timeout=3.0)
+        PanTiltStopSrv = rospy.ServiceProxy('/camera_pan_tilt/stop', Trigger)
+        print('[初始化] 云台服务已连接')
+    except Exception as e:
+        print(f'[初始化] 云台服务不可用 ({e})，将仅使用 pan_speed 话题')
 
     try:
         rospy.wait_for_service('/puppy_control/runActionGroup', timeout=5.0)
