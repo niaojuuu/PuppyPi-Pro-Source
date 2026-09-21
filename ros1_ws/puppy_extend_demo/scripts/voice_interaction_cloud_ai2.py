@@ -37,9 +37,22 @@ from openai import OpenAI
 from std_msgs.msg import *
 from std_srvs.srv import Trigger, TriggerResponse
 from puppy_control.msg import Velocity, Pose, Gait
+from sensor_msgs.msg import Image as RosImage
+from cv_bridge import CvBridge
 from puppy_control.srv import SetRunActionName
 from ros_robot_controller.msg import RGBState, RGBsState
 import sensor.Sonar as Sonar
+
+# 本地人脸识别（注册/识别）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from face_recognition_lib import FaceRecognizer
+    FACE_RECOGNIZER = FaceRecognizer()
+    FACE_LIB_OK = True
+except Exception as _e:
+    FACE_RECOGNIZER = None
+    FACE_LIB_OK = False
+    print(f'[人脸识别] 初始化失败：{_e}')
 
 print('''
 **********************************************************
@@ -890,6 +903,137 @@ def action_stop_find():
         print('[寻物] 已停止寻物')
 
 
+# ==================== 本地人脸识别 ====================
+# 与现有寻物/跟随共用订阅模式：开新订阅 → 缓存最新帧 → 用完清理
+_face_image_sub = None
+_face_latest_frame = [None]
+_face_frame_lock = threading.Lock()
+
+
+def _face_image_cb(ros_image):
+    try:
+        bgr = CvBridge().imgmsg_to_cv2(ros_image, 'bgr8')
+        with _face_frame_lock:
+            _face_latest_frame[0] = bgr
+    except Exception as e:
+        print(f'[人脸] 图像转换错误：{e}')
+
+
+def _ensure_face_image_source():
+    """确保有订阅 /usb_cam/image_raw（避免和其它模式重复订阅，重复订阅在 ROS 是允许的但浪费）"""
+    global _face_image_sub
+    if _face_image_sub is None:
+        _face_image_sub = rospy.Subscriber(
+            '/usb_cam/image_raw', RosImage, _face_image_cb,
+            queue_size=1, buff_size=2**24)
+        rospy.sleep(0.3)
+
+
+def _get_face_frame():
+    """取一帧；返回 BGR ndarray 或 None"""
+    with _face_frame_lock:
+        return _face_latest_frame[0]
+
+
+def _ask_for_name_then_add():
+    """触发一次额外录音，让用户告知要注册的名字。
+    由于 keyword_match 阶段已经知道名字，这里是 LLM 入口的兜底。"""
+    if tts_engine:
+        tts_and_play(tts_engine, '请告诉我你的名字')
+    # 复用主循环的录音：但当前在动作执行流里，
+    # 简单方案：让用户在主循环下一轮说出名字时由 keyword_match 重新触发 add_face
+    # 这里直接退出，名字由下一轮语音给出
+    return None
+
+
+def action_add_face(name=''):
+    """注册人脸：拍照并把名字+特征编码写入 yaml 库。
+    name 可为空，会进入"请说名字"的提示模式。"""
+    global FACE_RECOGNIZER, FACE_LIB_OK
+    if not FACE_LIB_OK or FACE_RECOGNIZER is None:
+        msg = '人脸识别功能不可用'
+        print(f'[人脸] {msg}')
+        if tts_engine:
+            tts_and_play(tts_engine, msg)
+        return
+
+    name = (name or '').strip()
+    if not name:
+        # 名字为空：提示用户下一轮说出名字（由主循环 keyword_match 捕获）
+        print('[人脸] 缺少名字，等待用户下一轮告知')
+        if tts_engine:
+            tts_and_play(tts_engine, '请告诉我你的名字')
+        return
+
+    print(f'[人脸] 开始注册：{name}')
+    if tts_engine:
+        tts_and_play(tts_engine, f'好的，请面对摄像头，我要记住{name}了')
+    rospy.sleep(0.3)
+
+    _ensure_face_image_source()
+
+    def cb():
+        return _get_face_frame()
+
+    ok, message, dim = FACE_RECOGNIZER.register(name=name, image_callback=cb, timeout=6.0)
+    print(f'[人脸] 注册结果：{message} (特征维度={dim})')
+    if tts_engine:
+        tts_and_play(tts_engine, message)
+
+
+def action_who_am_i():
+    """识别摄像头前的人是谁"""
+    global FACE_RECOGNIZER, FACE_LIB_OK
+    if not FACE_LIB_OK or FACE_RECOGNIZER is None:
+        msg = '人脸识别功能不可用'
+        print(f'[人脸] {msg}')
+        if tts_engine:
+            tts_and_play(tts_engine, msg)
+        return
+
+    if FACE_RECOGNIZER.db_size == 0:
+        msg = '人脸库是空的，请先添加'
+        print(f'[人脸] {msg}')
+        if tts_engine:
+            tts_and_play(tts_engine, msg)
+        return
+
+    print('[人脸] 正在识别人脸...')
+    if tts_engine:
+        tts_and_play(tts_engine, '让我看看你是谁')
+
+    _ensure_face_image_source()
+
+    def cb():
+        return _get_face_frame()
+
+    name, message, dist = FACE_RECOGNIZER.recognize(image_callback=cb, timeout=6.0)
+    print(f'[人脸] 识别结果：name={name}, msg={message}, dist={dist}')
+    if tts_engine:
+        tts_and_play(tts_engine, message)
+
+
+def action_who_is_he():
+    """识别别人是谁（语义和 action_who_am_i 相同：都是识别当前画面里的人）"""
+    action_who_am_i()
+
+
+def action_list_faces():
+    """列出已注册的人脸"""
+    global FACE_RECOGNIZER, FACE_LIB_OK
+    if not FACE_LIB_OK or FACE_RECOGNIZER is None:
+        msg = '人脸识别功能不可用'
+    else:
+        people = FACE_RECOGNIZER.list_people()
+        if people:
+            msg = '已记住' + '、'.join(people)
+        else:
+            msg = '人脸库是空的'
+    print(f'[人脸] {msg}')
+    if tts_engine:
+        tts_and_play(tts_engine, msg)
+
+
 # ==================== 跟随模式（摄像头人体检测） 续 ====================
 
 FOLLOW_SPEED = 8
@@ -1232,6 +1376,9 @@ ACTION_MAP = {
     'camera_look_right()': action_camera_look_right,
     'camera_sweep()': action_camera_sweep,
     'camera_stop()': action_camera_stop,
+    'who_am_i()': action_who_am_i,
+    'who_is_he()': action_who_is_he,
+    'list_faces()': action_list_faces,
 }
 
 # ==================== 关键词快速匹配（短路 LLM） ====================
@@ -1262,6 +1409,12 @@ KEYWORD_RULES = [
     (['右看', '看右边', '往右看', '摄像头右看', '向右看', '头往右'], ['camera_look_right()'], '好的，往右看'),
     (['环顾四周', '环顾', '扫一圈', '扫视', '看一圈', '四周看看'], ['camera_sweep()'], '我看看四周'),
     (['摄像头停下', '摄像头停', '停止摄像头', '停摄像头'], ['camera_stop()'], '摄像头停了'),
+    # ---- 人脸识别（仅 add_face 在关键词阶段能确定名字；who 系列直接放行）----
+    (['我是谁', '你认识我吗', '你认识我'], ['who_am_i()'], '让我看看你是谁'),
+    (['他是谁', '她是谁', '这是谁', '你认识他吗', '你认识她吗', '摄像头里是谁'], ['who_is_he()'], '让我看看他是谁'),
+    (['你认识哪些人', '你记住了谁', '列出认识的人'], ['list_faces()'], '让我看看'),
+    # add_face 因为要从句子中提取名字（"添加张三到人脸库"），
+    # 不放在关键词阶段，留给 LLM 处理
 ]
 
 def keyword_match(text):
@@ -1277,8 +1430,10 @@ def keyword_match(text):
 
 SYSTEM_PROMPT = '''你是机器狗，根据用户指令输出 JSON。严格只输出 JSON，不要输出其他内容。
 格式：{"action":["函数名"],"response":"简短回复"}
-可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find() camera_look_left() camera_look_right() camera_sweep() camera_stop()
-注意：find_object 的物品名用单引号括起来，如 find_object('水杯')
+可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find() camera_look_left() camera_look_right() camera_sweep() camera_stop() who_am_i() who_is_he() list_faces() add_face('人名')
+注意：
+- find_object 的物品名用单引号括起来，如 find_object('水杯')
+- add_face 的人名用单引号括起来，如 add_face('张三')
 示例：
 用户：往前走两步
 {"action":["forward()","forward()"],"response":"冲冲冲"}
@@ -1297,7 +1452,17 @@ SYSTEM_PROMPT = '''你是机器狗，根据用户指令输出 JSON。严格只�
 用户：去找手机
 {"action":["find_object('手机')"],"response":"好的，我去找手机"}
 用户：不用找了
-{"action":["stop_find()"],"response":"好的，停止寻找"}'''
+{"action":["stop_find()"],"response":"好的，停止寻找"}
+用户：添加张三到人脸库
+{"action":["add_face('张三')"],"response":"好的，我记住张三"}
+用户：记住李四的脸
+{"action":["add_face('李四')"],"response":"好的，我记住李四"}
+用户：我是谁
+{"action":["who_am_i()"],"response":"让我看看你是谁"}
+用户：摄像头里是谁
+{"action":["who_is_he()"],"response":"让我看看他是谁"}
+用户：你认识哪些人
+{"action":["list_faces()"],"response":"我看一下"}'''
 
 # ==================== TTS 初始化 ====================
 
@@ -1555,6 +1720,25 @@ def execute_actions(action_list):
                     print(f'[动作] 执行出错：{e}')
             else:
                 print(f'[动作] 无法解析寻物目标：{action_str}')
+            continue
+
+        if action_str.startswith('add_face('):
+            import re
+            m = re.search(r"add_face\(['\"](.+?)['\"]\)", action_str)
+            if m:
+                name = m.group(1)
+                print(f'[动作] 执行：add_face({name})')
+                try:
+                    action_add_face(name)
+                except Exception as e:
+                    print(f'[动作] 执行出错：{e}')
+            else:
+                # 名字为空字符串时让用户下一轮告知
+                print('[动作] add_face 缺少名字，提示用户')
+                try:
+                    action_add_face('')
+                except Exception as e:
+                    print(f'[动作] 执行出错：{e}')
             continue
 
         func = ACTION_MAP.get(action_str)
