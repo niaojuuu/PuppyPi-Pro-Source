@@ -908,6 +908,8 @@ def action_stop_find():
 _face_image_sub = None
 _face_latest_frame = [None]
 _face_frame_lock = threading.Lock()
+# 上下文：用户说"添加人脸"不带名字时，置 True，下一轮用户说的名字会自动当作人名注册
+_pending_face_name = False
 
 
 def _face_image_cb(ros_image):
@@ -949,7 +951,7 @@ def _ask_for_name_then_add():
 def action_add_face(name=''):
     """注册人脸：拍照并把名字+特征编码写入 yaml 库。
     name 可为空，会进入"请说名字"的提示模式。"""
-    global FACE_RECOGNIZER, FACE_LIB_OK
+    global FACE_RECOGNIZER, FACE_LIB_OK, _pending_face_name
     if not FACE_LIB_OK or FACE_RECOGNIZER is None:
         msg = '人脸识别功能不可用'
         print(f'[人脸] {msg}')
@@ -959,26 +961,45 @@ def action_add_face(name=''):
 
     name = (name or '').strip()
     if not name:
-        # 名字为空：提示用户下一轮说出名字（由主循环 keyword_match 捕获）
-        print('[人脸] 缺少名字，等待用户下一轮告知')
+        # 名字为空：标记等待，下一轮主循环读到的短文本会当作名字
+        _pending_face_name = True
+        print('[人脸] 缺少名字，等待用户下一轮告知', flush=True)
         if tts_engine:
             tts_and_play(tts_engine, '请告诉我你的名字')
         return
 
-    print(f'[人脸] 开始注册：{name}')
+    print(f'[人脸] 开始注册：{name}', flush=True)
     if tts_engine:
         tts_and_play(tts_engine, f'好的，请面对摄像头，我要记住{name}了')
-    rospy.sleep(0.3)
+    rospy.sleep(0.5)
 
     _ensure_face_image_source()
+    # 等待最新帧到位（订阅刚建立时第一帧可能还在路上）
+    rospy.sleep(0.5)
 
     def cb():
         return _get_face_frame()
 
-    ok, message, dim = FACE_RECOGNIZER.register(name=name, image_callback=cb, timeout=6.0)
-    print(f'[人脸] 注册结果：{message} (特征维度={dim})')
+    ok, message, dim = FACE_RECOGNIZER.register(name=name, image_callback=cb, timeout=8.0)
+    print(f'[人脸] 注册结果：{message} (特征维度={dim})', flush=True)
     if tts_engine:
         tts_and_play(tts_engine, message)
+
+
+def try_handle_pending_face_name(text):
+    """主循环里调用：如果在等待名字，且本轮文本像是名字，直接当作 add_face 执行。"""
+    global _pending_face_name
+    if not _pending_face_name:
+        return False
+    _pending_face_name = False
+    text = (text or '').strip()
+    # 名字必须短（<= 12 字符），且不是问句/动作词
+    if not text or len(text) > 12 or any(c in text for c in '？?，,。.!！'):
+        print(f'[人脸] 等待名字，但收到"{text}"，忽略', flush=True)
+        return False
+    print(f'[人脸] 收到名字：{text}', flush=True)
+    action_add_face(text)
+    return True
 
 
 def action_who_am_i():
@@ -992,13 +1013,13 @@ def action_who_am_i():
         return
 
     if FACE_RECOGNIZER.db_size == 0:
-        msg = '人脸库是空的，请先添加'
+        msg = '我还不认识任何人，先添加一张人脸吧'
         print(f'[人脸] {msg}')
         if tts_engine:
             tts_and_play(tts_engine, msg)
         return
 
-    print('[人脸] 正在识别人脸...')
+    print('[人脸] 正在识别人脸...', flush=True)
     if tts_engine:
         tts_and_play(tts_engine, '让我看看你是谁')
 
@@ -1007,10 +1028,13 @@ def action_who_am_i():
     def cb():
         return _get_face_frame()
 
-    name, message, dist = FACE_RECOGNIZER.recognize(image_callback=cb, timeout=6.0)
-    print(f'[人脸] 识别结果：name={name}, msg={message}, dist={dist}')
+    name, message, dist = FACE_RECOGNIZER.recognize(image_callback=cb, timeout=8.0)
+    print(f'[人脸] 识别结果：name={name}, msg={message}, dist={dist}', flush=True)
     if tts_engine:
         tts_and_play(tts_engine, message)
+    # "不认识" 也明确告知：给出建议
+    if name is None and '不认识' in message:
+        print('[人脸] 未识别：可能是库中无此人或光线不好/侧脸', flush=True)
 
 
 def action_who_is_he():
@@ -1413,8 +1437,9 @@ KEYWORD_RULES = [
     (['我是谁', '你认识我吗', '你认识我'], ['who_am_i()'], '让我看看你是谁'),
     (['他是谁', '她是谁', '这是谁', '你认识他吗', '你认识她吗', '摄像头里是谁'], ['who_is_he()'], '让我看看他是谁'),
     (['你认识哪些人', '你记住了谁', '列出认识的人'], ['list_faces()'], '让我看看'),
-    # add_face 因为要从句子中提取名字（"添加张三到人脸库"），
-    # 不放在关键词阶段，留给 LLM 处理
+    # 添加人脸：关键词阶段不带名字，进入"请告诉我名字"模式
+    (['添加人脸', '记住我', '记住一张脸', '加张人脸', '加脸'], ['add_face()'], '请告诉我你的名字'),
+    # add_face 带名字的（"添加张三到人脸库"）留给 LLM 处理
 ]
 
 def keyword_match(text):
@@ -1870,6 +1895,10 @@ def main():
 
                     if not text:
                         print("[跳过] 未识别到语音")
+                        continue
+
+                    # 如果在等待名字，下一轮文本直接当作名字处理
+                    if try_handle_pending_face_name(text):
                         continue
 
                     # 先尝试关键词快速匹配

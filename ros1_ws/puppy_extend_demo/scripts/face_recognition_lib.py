@@ -27,8 +27,28 @@ FACE_DB_PATH = os.path.join(CONFIG_DIR, 'face_db.yaml')
 FACE_MATCH_TOLERANCE = 0.45
 
 # 取帧质量评估：最多连拍 N 帧，挑人脸最大那张
-CAPTURE_MAX_FRAMES = 8
-CAPTURE_INTERVAL = 0.15  # 秒
+CAPTURE_MAX_FRAMES = 15
+CAPTURE_INTERVAL = 0.20  # 秒
+
+# MediaPipe 检测置信度（树莓派摄像头+室内可能有噪点，0.3 容易漏；降到 0.2 更稳）
+MEDIAPIPE_DETECT_CONF = 0.2
+
+
+def _enhance_for_face_detect(bgr):
+    """
+    预处理：CLAHE 直方图均衡化（处理逆光/欠曝），增强人脸区域对比度。
+    仅用于检测阶段，不影响最终编码质量（编码仍用原图）。
+    """
+    try:
+        # BGR -> LAB，对 L 通道做 CLAHE，保留色彩
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        merged = cv2.merge([l, a, b])
+        return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+    except Exception:
+        return bgr
 
 # ---------- 依赖探测 ----------
 FACE_REC_OK = False
@@ -170,11 +190,14 @@ def _capture_best_frame(image_callback, timeout=5.0):
     连续取若干帧，返回人脸面积最大的一帧（OpenCV BGR 格式）
     image_callback: callable() -> BGR ndarray or None
     返回: (best_frame, best_area) ; (None, 0) 表示未取到帧
+
+    策略：每帧同时用原图和 CLAHE 增强图各跑一次检测（双保险：逆光下增强图更易出结果）。
     """
     deadline = time.time() + timeout
     best_frame = None
     best_area = 0
     attempts = 0
+    frames_seen = 0
 
     while time.time() < deadline and attempts < CAPTURE_MAX_FRAMES:
         frame = image_callback()
@@ -182,43 +205,68 @@ def _capture_best_frame(image_callback, timeout=5.0):
             time.sleep(CAPTURE_INTERVAL)
             attempts += 1
             continue
+        frames_seen += 1
 
-        if FACE_REC_OK:
-            try:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                locs = face_recognition.face_locations(rgb, model='hog')
-                if locs:
-                    top, right, bottom, left = locs[0]
-                    area = (right - left) * (bottom - top)
-                    if area > best_area:
-                        best_area = area
-                        best_frame = frame
-            except Exception as e:
-                print(f'[FaceLib] 探测帧出错：{e}')
+        # 原图 + 增强图各跑一次
+        candidates = [(frame, '原图')]
+        enhanced = _enhance_for_face_detect(frame)
+        if enhanced is not frame:
+            candidates.append((enhanced, '增强图'))
 
-        elif MEDIAPIPE_OK:
-            try:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                with mp.solutions.face_mesh.FaceMesh(
-                    static_image_mode=True, max_num_faces=1,
-                    refine_landmarks=False, min_detection_confidence=0.5) as fm:
-                    res = fm.process(rgb)
-                    if res.multi_face_landmarks:
-                        # 用所有可见关键点的bbox面积作为质量分数
-                        ih, iw = frame.shape[:2]
-                        xs = [lm.x * iw for lm in res.multi_face_landmarks[0].landmark]
-                        ys = [lm.y * ih for lm in res.multi_face_landmarks[0].landmark]
-                        area = (max(xs) - min(xs)) * (max(ys) - min(ys))
-                        if area > best_area:
-                            best_area = area
-                            best_frame = frame
-            except Exception as e:
-                print(f'[FaceLib] MediaPipe 探测帧出错：{e}')
+        for img, label in candidates:
+            area, ok = _detect_face_area(img)
+            if ok and area > best_area:
+                best_area = area
+                # 最终保存原图（用于编码，保持色彩真实）
+                best_frame = frame
+                if best_area > 0:
+                    print(f'[FaceLib] 命中 ({label}) 面积={int(best_area)}', flush=True)
 
         time.sleep(CAPTURE_INTERVAL)
         attempts += 1
 
+    print(f'[FaceLib] 连拍结束：attempts={attempts}, 拿到帧={frames_seen}, 最佳面积={int(best_area)}', flush=True)
     return best_frame, best_area
+
+
+def _detect_face_area(bgr):
+    """
+    检测单帧的人脸面积。
+    返回: (area, ok) ; ok=True 表示检测到
+    """
+    try:
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    except Exception:
+        return 0, False
+
+    if FACE_REC_OK:
+        try:
+            locs = face_recognition.face_locations(rgb, model='hog')
+            if locs:
+                top, right, bottom, left = locs[0]
+                area = (right - left) * (bottom - top)
+                return area, True
+        except Exception as e:
+            print(f'[FaceLib] dlib 检测出错：{e}', flush=True)
+        return 0, False
+
+    if MEDIAPIPE_OK:
+        try:
+            with mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=True, max_num_faces=1,
+                refine_landmarks=False, min_detection_confidence=MEDIAPIPE_DETECT_CONF) as fm:
+                res = fm.process(rgb)
+                if res.multi_face_landmarks:
+                    ih, iw = bgr.shape[:2]
+                    xs = [lm.x * iw for lm in res.multi_face_landmarks[0].landmark]
+                    ys = [lm.y * ih for lm in res.multi_face_landmarks[0].landmark]
+                    area = (max(xs) - min(xs)) * (max(ys) - min(ys))
+                    return float(area), True
+        except Exception as e:
+            print(f'[FaceLib] MediaPipe 检测出错：{e}', flush=True)
+        return 0, False
+
+    return 0, False
 
 
 def extract_face_encoding(frame_bgr):
@@ -228,14 +276,14 @@ def extract_face_encoding(frame_bgr):
     """
     if frame_bgr is None:
         return None
-    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
     if FACE_REC_OK:
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         locs = face_recognition.face_locations(rgb, model='hog')
         if not locs:
             return None
         if len(locs) > 1:
-            print(f'[FaceLib] 检测到 {len(locs)} 张人脸，请保持单人')
+            print(f'[FaceLib] 检测到 {len(locs)} 张人脸，请保持单人', flush=True)
             return None
         encs = face_recognition.face_encodings(rgb, known_face_locations=locs)
         if not encs:
@@ -243,18 +291,27 @@ def extract_face_encoding(frame_bgr):
         return np.array(encs[0], dtype=np.float32)
 
     if MEDIAPIPE_OK:
+        # 先用增强图检测，再用原图提取（编码用原图保持色彩真实）
+        enhanced = _enhance_for_face_detect(frame_bgr)
+        rgb_enh = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
         with mp.solutions.face_mesh.FaceMesh(
             static_image_mode=True, max_num_faces=1,
-            refine_landmarks=False, min_detection_confidence=0.5) as fm:
-            res = fm.process(rgb)
+            refine_landmarks=False, min_detection_confidence=MEDIAPIPE_DETECT_CONF) as fm:
+            res = fm.process(rgb_enh)
             if not res.multi_face_landmarks:
-                return None
-            lms = res.multi_face_landmarks[0].landmark
-            # 468 关键点 × 3 维 = 1404 维特征（归一化坐标）
-            vec = []
-            for lm in lms:
-                vec.extend([lm.x, lm.y, lm.z])
-            return np.array(vec, dtype=np.float32)
+                # 退化：再试原图
+                rgb_orig = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                res = fm.process(rgb_orig)
+                if not res.multi_face_landmarks:
+                    return None
+                lms = res.multi_face_landmarks[0].landmark
+            else:
+                lms = res.multi_face_landmarks[0].landmark
+        # 468 关键点 × 3 维 = 1404 维特征（归一化坐标）
+        vec = []
+        for lm in lms:
+            vec.extend([lm.x, lm.y, lm.z])
+        return np.array(vec, dtype=np.float32)
 
     return None
 
