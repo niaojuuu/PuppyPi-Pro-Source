@@ -134,9 +134,13 @@ def find_serial_port():
 MIC_SAMPLE_RATE = 48000  # USB 麦克风硬件采样率（48k 是标准 USB 音频采样率）
 CHANNELS = 1
 MIC_CHUNK = 4800  # 100ms per chunk (48000 * 0.1)
-SILENCE_THRESHOLD = 3000  # 能量阈值（根据实际底噪调整）
-SILENCE_DURATION = 1.0   # 静音持续秒数触发结束
-MAX_RECORD_SECONDS = 15  # 云端识别支持更长录音
+# VAD 端点检测
+SILENCE_THRESHOLD = 3000  # 能量阈值（int16 绝对值均值）
+SILENCE_DURATION = 1.8    # 静音持续秒数触发结束（提高以容忍中文自然停顿）
+MAX_RECORD_SECONDS = 15   # 云端识别支持更长录音
+# 前导缓冲：录音启动后这段时间只采集音频，不参与端点检测
+# 用途：消化 TTS "嗯"的残响；这段时间用户开口的话也会保留在 wav 里送 ASR
+PREROLL_SEC = 0.5
 
 # LLM 配置 - 阿里云 DashScope
 DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', 'sk-4fe56ee3d9e44b248516ef93d95190f4')
@@ -1525,7 +1529,17 @@ def find_usb_mic(pa):
 # ==================== 录音 + 保存为 WAV ====================
 
 def record_audio_wav():
-    """录音并保存为 WAV 文件，返回文件路径"""
+    """
+    录音并保存为 WAV 文件，返回文件路径。
+
+    VAD 改进（避免"还没开口就被截"和"句中停顿被截"）：
+    1. 前导缓冲 PREROLL_SEC：录音启动后这段时间只采集音频，不参与端点判断，
+       用于消化 TTS "嗯"的残响。这段期间用户开口的话也会保留在 wav 里送 ASR。
+    2. SILENCE_DURATION 1.0→1.8s：容忍中文句中自然停顿（如"添加…张三的人脸"）。
+
+    不做底噪自适应：TTS 残响期或用户急性子开口时算出的"底噪"会严重偏高，
+    导致后续正常语音（4000 量级）被判为静音，录音跑到 MAX 还不停。
+    """
     pa = pyaudio.PyAudio()
     dev_index = find_usb_mic(pa)
 
@@ -1543,12 +1557,13 @@ def record_audio_wav():
                 print(f"  Index {i}: {info['name']} (channels={info['maxInputChannels']})")
         pa.terminate()
         raise
-    print("[录音] 开始录音...")
+    print("[录音] 开始录音（前导期消化 TTS 残响）...")
 
     silence_chunks = 0
     speech_detected = False
     max_chunks = int(MAX_RECORD_SECONDS * MIC_SAMPLE_RATE / MIC_CHUNK)
     silence_limit = int(SILENCE_DURATION * MIC_SAMPLE_RATE / MIC_CHUNK)
+    preroll_chunks = int(PREROLL_SEC * MIC_SAMPLE_RATE / MIC_CHUNK)
     total_samples = 0
     audio_frames = []
 
@@ -1560,6 +1575,12 @@ def record_audio_wav():
         # 计算能量
         audio_data = np.frombuffer(data, dtype=np.int16)
         energy = np.abs(audio_data).mean()
+
+        # 前导期：仅采集，不做端点判断
+        if i < preroll_chunks:
+            continue
+
+        # 正式 VAD
         if energy >= SILENCE_THRESHOLD:
             speech_detected = True
             silence_chunks = 0
@@ -1568,7 +1589,7 @@ def record_audio_wav():
 
         # 语音出现后，连续静音超过阈值则停止录音
         if speech_detected and silence_chunks >= silence_limit:
-            print("[录音] 检测到静音，停止录音")
+            print(f"[录音] 检测到静音 {SILENCE_DURATION}s，停止录音")
             break
 
     mic_stream.stop_stream()
@@ -1817,8 +1838,12 @@ def check_wakeup(ser):
     return False
 
 def play_wakeup_reply(tts_engine):
-    """用 TTS 合成并播放唤醒回复'我在'"""
-    tts_and_play(tts_engine, '我在')
+    """用 TTS 合成并播放唤醒回复。
+
+    用"嗯"（~0.2s）代替"我在"（~1s），缩短扬声器占用时间，
+    配合 record_audio_wav 的前导缓冲（PREROLL_SEC=0.5s）正好消化 TTS 残响。
+    """
+    tts_and_play(tts_engine, '嗯')
 
 # ==================== 主循环 ====================
 
@@ -1882,7 +1907,7 @@ def main():
                     wav_path, duration = record_audio_wav()
 
                     rgb_off()
-                    if duration < 0.3:
+                    if duration < 0.6:
                         print("[跳过] 录音太短")
                         continue
 
