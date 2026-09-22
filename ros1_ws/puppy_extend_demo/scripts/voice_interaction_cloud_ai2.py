@@ -137,7 +137,7 @@ MIC_CHUNK = 4800  # 100ms per chunk (48000 * 0.1)
 # VAD 端点检测
 SILENCE_THRESHOLD = 3000  # 能量阈值（int16 绝对值均值）
 SILENCE_DURATION = 1.2    # 静音持续秒数触发结束（容忍中文句中停顿）
-MAX_RECORD_SECONDS = 15   # 云端识别支持更长录音
+MAX_RECORD_SECONDS = 10   # 云端识别最长录音时长（撞顶后强制停止）
 # 前导缓冲：录音启动后这段时间只采集音频，不参与端点检测
 # 用途：消化 TTS "嗯"的残响；这段时间用户开口的话也会保留在 wav 里送 ASR
 PREROLL_SEC = 0.5
