@@ -135,9 +135,11 @@ def _ask(prompt, silent=False):
 
 # ==================== 录音 ====================
 
-def record_audio(duration=5, sample_rate=16000, silent=False):
+def record_audio(duration=5, sample_rate=48000, silent=False):
     """
     使用 pyaudio 录制固定时长音频
+    默认 48000 Hz 匹配 USB PnP 麦(其它采样率返回 Invalid sample rate);
+    Resemblyzer 内部会自动重采样到 16000,不影响声纹特征。
     :return: 临时音频文件路径
     """
     try:
