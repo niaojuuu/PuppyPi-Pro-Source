@@ -520,17 +520,38 @@ def action_two_leg_stand():
 
 def action_camera_look_left():
     """摄像头左看：转到中心左侧 30°（绝对角度 150°）"""
-    if PanTiltPanAnglePub is None:
-        print('[云台] 未初始化，跳过')
-        return
-    PanTiltPanAnglePub.publish(150.0)
+    action_camera_look(150.0)
 
 def action_camera_look_right():
     """摄像头右看：转到中心右侧 30°（绝对角度 210°）"""
+    action_camera_look(210.0)
+
+def action_camera_look(angle):
+    """摄像头转到指定绝对角度
+    angle: 0.0 ~ 360.0，超出 clamp 到边界
+    """
     if PanTiltPanAnglePub is None:
         print('[云台] 未初始化，跳过')
         return
-    PanTiltPanAnglePub.publish(210.0)
+    try:
+        angle = float(angle)
+    except (TypeError, ValueError):
+        print(f'[云台] 角度参数无效：{angle}')
+        return
+    clamped = max(0.0, min(360.0, angle))
+    if clamped != angle:
+        print(f'[云台] 角度 {angle} 超出 [0, 360]，clamp 到 {clamped}')
+    PanTiltPanAnglePub.publish(clamped)
+
+def action_camera_reset():
+    """摄像头复位到中心 180°（前方）"""
+    if PanTiltStopSrv is not None:
+        try:
+            PanTiltStopSrv()
+            return
+        except Exception as e:
+            print(f'[云台] stop 服务失败：{e}，改用话题')
+    action_camera_look(180.0)
 
 def action_camera_sweep():
     """摄像头环顾四周：360°全景扫描（调用 camera_pan_tilt 节点的服务）"""
@@ -544,18 +565,8 @@ def action_camera_sweep():
         print(f'[云台] sweep 调用失败：{e}')
 
 def action_camera_stop():
-    """摄像头回到中心 180°（前方）"""
-    if PanTiltStopSrv is None and PanTiltPanAnglePub is None:
-        print('[云台] 未初始化')
-        return
-    if PanTiltStopSrv is not None:
-        try:
-            PanTiltStopSrv()
-        except Exception as e:
-            print(f'[云台] stop 服务失败：{e}，改用话题')
-            PanTiltPanAnglePub.publish(180.0)
-    else:
-        PanTiltPanAnglePub.publish(180.0)
+    """摄像头停止旋转（兼容旧名，等价于复位到中心 180°）"""
+    action_camera_reset()
 
 # ==================== 跟随模式（摄像头人体检测） ====================
 follow_thread = None
@@ -1415,6 +1426,8 @@ ACTION_MAP = {
     'camera_look_right()': action_camera_look_right,
     'camera_sweep()': action_camera_sweep,
     'camera_stop()': action_camera_stop,
+    'camera_reset()': action_camera_reset,
+    # camera_look(angle) 带参数，走 main loop 里专门解析（见 ACTION_MAP 注释）
     'who_am_i()': action_who_am_i,
     'who_is_he()': action_who_is_he,
     'list_faces()': action_list_faces,
@@ -1448,6 +1461,7 @@ KEYWORD_RULES = [
     (['右看', '看右边', '往右看', '摄像头右看', '向右看', '头往右'], ['camera_look_right()'], '好的，往右看'),
     (['环顾四周', '环顾', '扫一圈', '扫视', '看一圈', '四周看看'], ['camera_sweep()'], '我看看四周'),
     (['摄像头停下', '摄像头停', '停止摄像头', '停摄像头'], ['camera_stop()'], '摄像头停了'),
+    (['回正', '复位', '摄像头复位', '看前面', '看正前方', '正前方', '回到中间', '回中间', '头回正'], ['camera_reset()'], '好的，摄像头回正'),
     # ---- 人脸识别（仅 add_face 在关键词阶段能确定名字；who 系列直接放行）----
     (['我是谁', '你认识我吗', '你认识我'], ['who_am_i()'], '让我看看你是谁'),
     (['他是谁', '她是谁', '这是谁', '你认识他吗', '你认识她吗', '摄像头里是谁'], ['who_is_he()'], '让我看看他是谁'),
@@ -1470,10 +1484,11 @@ def keyword_match(text):
 
 SYSTEM_PROMPT = '''你是机器狗，根据用户指令输出 JSON。严格只输出 JSON，不要输出其他内容。
 格式：{"action":["函数名"],"response":"简短回复"}
-可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find() camera_look_left() camera_look_right() camera_sweep() camera_stop() who_am_i() who_is_he() list_faces() add_face('人名')
+可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find() camera_look_left() camera_look_right() camera_look('角度') camera_reset() camera_sweep() camera_stop() who_am_i() who_is_he() list_faces() add_face('人名')
 注意：
 - find_object 的物品名用单引号括起来，如 find_object('水杯')
 - add_face 的人名用单引号括起来，如 add_face('张三')
+- camera_look 的角度用单引号括起来，范围 0~360，如 camera_look(90)、camera_look(270)；camera_look(180) 等价于 camera_reset()
 示例：
 用户：往前走两步
 {"action":["forward()","forward()"],"response":"冲冲冲"}
@@ -1502,7 +1517,13 @@ SYSTEM_PROMPT = '''你是机器狗，根据用户指令输出 JSON。严格只�
 用户：摄像头里是谁
 {"action":["who_is_he()"],"response":"让我看看他是谁"}
 用户：你认识哪些人
-{"action":["list_faces()"],"response":"我看一下"}'''
+{"action":["list_faces()"],"response":"我看一下"}
+用户：转到90度
+{"action":["camera_look(90)"],"response":"好的，转到90度"}
+用户：回正
+{"action":["camera_reset()"],"response":"好的，摄像头回正"}
+用户：往左看
+{"action":["camera_look_left()"],"response":"好的，往左看"}'''
 
 # ==================== TTS 初始化 ====================
 
@@ -1788,6 +1809,21 @@ def execute_actions(action_list):
                     action_add_face('')
                 except Exception as e:
                     print(f'[动作] 执行出错：{e}')
+            continue
+
+        if action_str.startswith('camera_look('):
+            import re
+            # 兼容 camera_look(90)、camera_look('90')、camera_look('90度')
+            m = re.search(r"camera_look\(\s*['\"]?([0-9.]+)\s*['\"]?\)", action_str)
+            if m:
+                angle = float(m.group(1))
+                print(f'[动作] 执行：camera_look({angle})')
+                try:
+                    action_camera_look(angle)
+                except Exception as e:
+                    print(f'[动作] 执行出错：{e}')
+            else:
+                print(f'[动作] camera_look 缺少角度：{action_str}')
             continue
 
         func = ACTION_MAP.get(action_str)

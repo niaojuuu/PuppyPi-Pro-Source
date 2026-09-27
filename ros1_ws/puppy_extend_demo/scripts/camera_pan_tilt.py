@@ -53,9 +53,14 @@ def set_pan_angle(angle):
 
 
 def stop_pan():
-    """水平舵机回中心 180°"""
+    """水平舵机回中心 180°（与 reset_pan 等价，保留旧名兼容）"""
     with lock:
         psc.setPulse(PAN_SERVO_ID, PULSE_CENTER, 50)
+
+
+def reset_pan():
+    """水平舵机复位到中心 180°"""
+    stop_pan()
 
 
 def set_tilt_angle(angle):
@@ -108,9 +113,9 @@ def sweep_cb(req):
 
 
 def stop_cb(req):
-    stop_pan()
-    rospy.loginfo("Pan stopped at center 180°")
-    return TriggerResponse(success=True, message="pan stopped at center 180°")
+    reset_pan()
+    rospy.loginfo("Pan reset to center 180°")
+    return TriggerResponse(success=True, message="pan reset to center 180°")
 
 
 # ============ 主函数 ============
