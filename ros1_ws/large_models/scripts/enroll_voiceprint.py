@@ -20,6 +20,7 @@
 
 import os
 import sys
+import time
 import argparse
 import tempfile
 import wave
@@ -86,12 +87,14 @@ def _init_tts():
 
 
 def _play_wav(path):
-    """尝试用系统命令播放 wav；都失败就静默跳过。"""
+    """尝试用系统命令播放 wav；都失败就静默跳过。
+    播完后稍等 0.5s 让 ALSA 释放音频设备，避免下次 pyaudio 录音时撞车。"""
     # 优先 aplay (ALSA)，回退 paplay (PulseAudio)，再回退 sox
     for cmd in (f'aplay -q {path}', f'paplay {path}', f'play -q {path}'):
         try:
             ret = os.system(f'{cmd} >/dev/null 2>&1')
             if ret == 0:
+                time.sleep(0.5)
                 return True
         except Exception:
             pass
