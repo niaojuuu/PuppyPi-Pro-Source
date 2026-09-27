@@ -188,7 +188,7 @@ PuppyGaitConfigPub = None
 PuppyVelocityPub = None
 RGBPub = None
 run_action_group_srv = None
-PanTiltPanSpeedPub = None
+PanTiltPanAnglePub = None
 PanTiltSweepSrv = None
 PanTiltStopSrv = None
 tts_engine = None
@@ -519,22 +519,18 @@ def action_two_leg_stand():
 # ==================== 云台摄像头控制 ====================
 
 def action_camera_look_left():
-    """摄像头左看：低速左转约30°后停止"""
-    if PanTiltPanSpeedPub is None:
+    """摄像头左看：转到中心左侧 30°（绝对角度 150°）"""
+    if PanTiltPanAnglePub is None:
         print('[云台] 未初始化，跳过')
         return
-    PanTiltPanSpeedPub.publish(-0.3)   # 负值=逆时针=左
-    rospy.sleep(1.0)                  # 30°/s × 1s ≈ 30°
-    PanTiltPanSpeedPub.publish(0.0)    # 停止
+    PanTiltPanAnglePub.publish(150.0)
 
 def action_camera_look_right():
-    """摄像头右看：低速右转约30°后停止"""
-    if PanTiltPanSpeedPub is None:
+    """摄像头右看：转到中心右侧 30°（绝对角度 210°）"""
+    if PanTiltPanAnglePub is None:
         print('[云台] 未初始化，跳过')
         return
-    PanTiltPanSpeedPub.publish(0.3)    # 正值=顺时针=右
-    rospy.sleep(1.0)
-    PanTiltPanSpeedPub.publish(0.0)
+    PanTiltPanAnglePub.publish(210.0)
 
 def action_camera_sweep():
     """摄像头环顾四周：360°全景扫描（调用 camera_pan_tilt 节点的服务）"""
@@ -548,8 +544,8 @@ def action_camera_sweep():
         print(f'[云台] sweep 调用失败：{e}')
 
 def action_camera_stop():
-    """摄像头停止旋转"""
-    if PanTiltStopSrv is None and PanTiltPanSpeedPub is None:
+    """摄像头回到中心 180°（前方）"""
+    if PanTiltStopSrv is None and PanTiltPanAnglePub is None:
         print('[云台] 未初始化')
         return
     if PanTiltStopSrv is not None:
@@ -557,9 +553,9 @@ def action_camera_stop():
             PanTiltStopSrv()
         except Exception as e:
             print(f'[云台] stop 服务失败：{e}，改用话题')
-            PanTiltPanSpeedPub.publish(0.0)
+            PanTiltPanAnglePub.publish(180.0)
     else:
-        PanTiltPanSpeedPub.publish(0.0)
+        PanTiltPanAnglePub.publish(180.0)
 
 # ==================== 跟随模式（摄像头人体检测） ====================
 follow_thread = None
@@ -1856,7 +1852,7 @@ def play_wakeup_reply(tts_engine):
 
 def main():
     global PuppyPosePub, PuppyGaitConfigPub, PuppyVelocityPub, RGBPub, run_action_group_srv
-    global PanTiltPanSpeedPub, PanTiltSweepSrv, PanTiltStopSrv
+    global PanTiltPanAnglePub, PanTiltSweepSrv, PanTiltStopSrv
 
     rospy.init_node('voice_interaction_cloud_ai2')
     rospy.on_shutdown(Stop)
@@ -1865,7 +1861,7 @@ def main():
     PuppyGaitConfigPub = rospy.Publisher('/puppy_control/gait', Gait, queue_size=1)
     PuppyVelocityPub = rospy.Publisher('/puppy_control/velocity', Velocity, queue_size=1)
     RGBPub = rospy.Publisher('/ros_robot_controller/set_rgb', RGBsState, queue_size=1)
-    PanTiltPanSpeedPub = rospy.Publisher('/camera_pan_tilt/pan_speed', Float32, queue_size=1)
+    PanTiltPanAnglePub = rospy.Publisher('/camera_pan_tilt/pan_angle', Float32, queue_size=1)
 
     rospy.sleep(0.5)
 
@@ -1876,7 +1872,7 @@ def main():
         PanTiltStopSrv = rospy.ServiceProxy('/camera_pan_tilt/stop', Trigger)
         print('[初始化] 云台服务已连接')
     except Exception as e:
-        print(f'[初始化] 云台服务不可用 ({e})，将仅使用 pan_speed 话题')
+        print(f'[初始化] 云台服务不可用 ({e})，将仅使用 pan_angle 话题')
 
     try:
         rospy.wait_for_service('/puppy_control/runActionGroup', timeout=5.0)
