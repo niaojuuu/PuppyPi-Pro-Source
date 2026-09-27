@@ -33,8 +33,14 @@ from voiceprint import VoicePrint, VoicePrintDB
 
 # ==================== TTS 语音播报（可选） ====================
 
-_HOME = os.path.expanduser('~')
-_TTS_MODEL_DIR = os.path.join(_HOME, 'models/sherpa-onnx/vits-zh-hf-fanchen-C')
+# 优先用 VOICEPRINT_TTS_MODEL_DIR 环境变量;其次 /home/ubuntu(ros 容器内统一位置);
+# 再次回退到 ~/models(开发机上能命中)。这样不管 SSH/roslaunch 怎么传 HOME 都不会炸。
+_TTS_CANDIDATES = [
+    os.environ.get('VOICEPRINT_TTS_MODEL_DIR', '').strip(),
+    '/home/ubuntu/models/sherpa-onnx/vits-zh-hf-fanchen-C',
+    os.path.join(os.path.expanduser('~'), 'models/sherpa-onnx/vits-zh-hf-fanchen-C'),
+]
+_TTS_MODEL_DIR = next((p for p in _TTS_CANDIDATES if p and os.path.isdir(p)), '')
 _TTS_WAV_TMP = '/tmp/tts_output.wav'
 
 _tts_engine = None
