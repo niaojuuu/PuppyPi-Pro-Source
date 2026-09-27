@@ -517,18 +517,24 @@ def action_two_leg_stand():
     rospy.sleep(0.8)
 
 # ==================== 云台摄像头控制 ====================
+#
+# 注意：机器狗有两个摄像头
+#   1. 前视固定摄像头 /usb_cam/image_raw  (device /dev/video0) — 不可旋转
+#   2. 云台摄像头      /usb_cam_surround/image_raw (device /dev/video1) — 360° 可旋转
+# 本节所有 action_camera_* 仅作用于云台摄像头 (2)。
+# 视觉算法（人脸/寻物等）默认订阅前视固定摄像头，旋转云台不会改变它们的视野。
 
 def action_camera_look_left():
-    """摄像头左看：转到中心左侧 30°（绝对角度 150°）"""
+    """【云台】左看：转到中心左侧 30°（绝对角度 150°）。仅作用于云台摄像头。"""
     action_camera_look(150.0)
 
 def action_camera_look_right():
-    """摄像头右看：转到中心右侧 30°（绝对角度 210°）"""
+    """【云台】右看：转到中心右侧 30°（绝对角度 210°）。仅作用于云台摄像头。"""
     action_camera_look(210.0)
 
 def action_camera_look(angle):
-    """摄像头转到指定绝对角度
-    angle: 0.0 ~ 360.0，超出 clamp 到边界
+    """【云台】转到指定绝对角度（0~360°，clamp）。
+    仅作用于云台摄像头 /usb_cam_surround，固定前视摄像头不受影响。
     """
     if PanTiltPanAnglePub is None:
         print('[云台] 未初始化，跳过')
@@ -544,7 +550,7 @@ def action_camera_look(angle):
     PanTiltPanAnglePub.publish(clamped)
 
 def action_camera_reset():
-    """摄像头复位到中心 180°（前方）"""
+    """【云台】复位到中心 180°（前方）。仅作用于云台摄像头。"""
     if PanTiltStopSrv is not None:
         try:
             PanTiltStopSrv()
@@ -554,7 +560,7 @@ def action_camera_reset():
     action_camera_look(180.0)
 
 def action_camera_sweep():
-    """摄像头环顾四周：360°全景扫描（调用 camera_pan_tilt 节点的服务）"""
+    """【云台】环顾四周：360°全景扫描。仅作用于云台摄像头。"""
     if PanTiltSweepSrv is None:
         print('[云台] sweep 服务不可用')
         return
@@ -565,7 +571,7 @@ def action_camera_sweep():
         print(f'[云台] sweep 调用失败：{e}')
 
 def action_camera_stop():
-    """摄像头停止旋转（兼容旧名，等价于复位到中心 180°）"""
+    """【云台】停止旋转（兼容旧名，等价于复位到中心 180°）。仅作用于云台摄像头。"""
     action_camera_reset()
 
 # ==================== 跟随模式（摄像头人体检测） ====================
@@ -1485,6 +1491,11 @@ def keyword_match(text):
 SYSTEM_PROMPT = '''你是机器狗，根据用户指令输出 JSON。严格只输出 JSON，不要输出其他内容。
 格式：{"action":["函数名"],"response":"简短回复"}
 可用函数：forward() backward() turn_left() turn_right() stop() stand() lie_down() sit() speed_up() slow_down() nod() sway() squat() shake_head() dance() pushup() kick_left() kick_right() twist_waist() situp() bow() spread_wings() wave() march() show_off() walk_steps() get_up() swagger() left_hook() right_hook() shake_hands() lean_right() hello() follow() stop_follow() two_leg_stand() find_object('物品名') stop_find() camera_look_left() camera_look_right() camera_look('角度') camera_reset() camera_sweep() camera_stop() who_am_i() who_is_he() list_faces() add_face('人名')
+摄像头架构（重要）：
+- 机器狗有两个摄像头。①前视固定 /usb_cam（不可旋转）；②云台可旋转 /usb_cam_surround（0~360°）。
+- 所有 camera_* 函数（camera_look/reset/sweep/look_left/look_right/stop）都只作用于云台摄像头②，前视固定摄像头①不可控。
+- 用户说"摄像头转动/看左/看右/环顾四周/转到X度"等旋转意图时，全部走 camera_*，不要尝试操控前视固定摄像头。
+- 人脸识别 (who_am_i/who_is_he/list_faces/add_face) 和寻物 (find_object) 默认看的是前视固定摄像头①的视野，不受云台旋转影响。
 注意：
 - find_object 的物品名用单引号括起来，如 find_object('水杯')
 - add_face 的人名用单引号括起来，如 add_face('张三')

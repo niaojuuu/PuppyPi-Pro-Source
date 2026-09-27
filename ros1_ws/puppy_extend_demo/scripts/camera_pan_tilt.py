@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # coding=utf8
 # 云台摄像头控制节点（Pan-Tilt Camera Control）
+#
+# 机器狗有两个摄像头：
+#   1. 前视固定摄像头 /usb_cam            (device /dev/video0) — 不可旋转
+#   2. 云台可旋转摄像头 /usb_cam_surround (device /dev/video1) — 本节点控制这个
+#
 # Pan: FEETECH FT6335M 360°位置式数字舵机（PWM端口9），磁编码器
 # Tilt: 暂未接入
 
