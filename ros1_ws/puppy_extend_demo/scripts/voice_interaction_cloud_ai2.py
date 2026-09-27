@@ -54,6 +54,21 @@ except Exception as _e:
     FACE_LIB_OK = False
     print(f'[人脸识别] 初始化失败：{_e}')
 
+# 本地声纹识别（多用户库；与 face_recognition_lib 同源）
+_LM_SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               '../../large_models/scripts')
+if _LM_SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _LM_SCRIPTS_DIR)
+try:
+    from voiceprint import VoicePrintDB
+    from config import voiceprint_db_path as _VP_DB_PATH, voiceprint_threshold as _VP_THRESHOLD
+    _VP_IMPORT_OK = True
+except Exception as _e:
+    _VP_IMPORT_OK = False
+    _VP_DB_PATH = ''
+    _VP_THRESHOLD = 0.7
+    print(f'[声纹] VoicePrintDB 加载失败：{_e}')
+
 print('''
 **********************************************************
 ****  功能：云端 AI 语音交互 - 自然语言控制机器狗  ****
@@ -1625,7 +1640,10 @@ def encode_audio_to_base64(wav_path):
 # ==================== 千问语音识别（通过阿里云 DashScope） ====================
 
 def recognize_speech_with_qwen(wav_path):
-    """使用阿里云 DashScope Paraformer 进行语音识别"""
+    """使用阿里云 DashScope Paraformer 进行语音识别。
+
+    注意：不删除 wav 文件，由调用方统一管理（声纹验证也复用此 wav）。
+    """
     print("[千问语音识别] 开始识别...")
 
     try:
@@ -1654,28 +1672,16 @@ def recognize_speech_with_qwen(wav_path):
             print("[千问语音识别] 未识别到内容")
             text = None
 
-        try:
-            os.unlink(wav_path)
-        except Exception:
-            pass
         return text
 
     except ImportError:
         print("[千问语音识别] dashscope SDK 不可用")
-        try:
-            os.unlink(wav_path)
-        except Exception:
-            pass
         return None
 
     except Exception as e:
         print(f"[千问语音识别] 错误：{e}")
         import traceback
         traceback.print_exc()
-        try:
-            os.unlink(wav_path)
-        except Exception:
-            pass
         return None
 
 # ==================== LLM 调用 ====================
@@ -1892,6 +1898,23 @@ def main():
     global tts_engine
     tts_engine = init_tts()
 
+    # 加载声纹库（按需；空库时禁用验证）
+    global voiceprint_db
+    voiceprint_db = None
+    if _VP_IMPORT_OK and _VP_DB_PATH and os.path.exists(_VP_DB_PATH):
+        try:
+            voiceprint_db = VoicePrintDB(_VP_DB_PATH, threshold=_VP_THRESHOLD)
+            if voiceprint_db.is_enrolled():
+                print(f'[声纹] 库已加载：{voiceprint_db.db_size} 人（阈值 {_VP_THRESHOLD}）')
+            else:
+                print('[声纹] 库为空，声纹验证已禁用（任何人说话都会通过）')
+                voiceprint_db = None
+        except Exception as e:
+            print(f'[声纹] 加载失败：{e}')
+            voiceprint_db = None
+    else:
+        print('[声纹] 未配置或文件不存在，跳过声纹验证')
+
     play_wakeup_reply(tts_engine)
     print("\n===== 系统就绪，请说「小幻小幻」唤醒 =====\n")
 
@@ -1919,9 +1942,29 @@ def main():
                     text = recognize_speech_with_qwen(wav_path)
                     rgb_off()
 
+                    def _safe_unlink(p):
+                        try:
+                            os.unlink(p)
+                        except Exception:
+                            pass
+
                     if not text:
                         print("[跳过] 未识别到语音")
+                        _safe_unlink(wav_path)
                         continue
+
+                    # 声纹验证（库为空或未加载时跳过；任何人都通过）
+                    if voiceprint_db is not None:
+                        vp_name, vp_conf, vp_ok = voiceprint_db.identify(wav_path)
+                        if not vp_ok:
+                            print(f"[声纹] 未通过 (最佳相似度 {vp_conf:.4f})，拒绝执行")
+                            if tts_engine:
+                                tts_and_play(tts_engine, '你不是我的主人，不听你命令')
+                            _safe_unlink(wav_path)
+                            last_interact_time = time.time()
+                            continue
+                        print(f"[声纹] 匹配：{vp_name} (相似度 {vp_conf:.4f})")
+                    _safe_unlink(wav_path)
 
                     # 如果在等待名字，下一轮文本直接当作名字处理
                     if try_handle_pending_face_name(text):
