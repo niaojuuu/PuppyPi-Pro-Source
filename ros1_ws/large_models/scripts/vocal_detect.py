@@ -11,7 +11,7 @@ from std_msgs.msg import Int32, String
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
 from speech import speech
 from config import *
-from voiceprint import VoicePrint
+from voiceprint import VoicePrint, VoicePrintDB
 from large_models.srv import SetInt32, SetInt32Response
 
 # 定义日志包装器类
@@ -57,11 +57,28 @@ class VocalDetect(object):
         self.asr = speech.ASR(asr_api_key, asr_secret_key, asr_cuid)
 
         # 初始化声纹验证
-        self.voiceprint = VoicePrint(owner_embedding_path, threshold=voiceprint_threshold)
-        if self.voiceprint.is_enrolled():
-            rospy.loginfo('\033[1;32m%s\033[0m' % '已加载主人声纹')
-        else:
-            rospy.logwarn('未找到主人声纹文件，将跳过声纹验证')
+        # 优先使用多用户库 voiceprint_db.yaml；若不存在或库为空，回退到旧的单主人 .npy
+        self.voiceprint_db = None
+        self.voiceprint_legacy = None
+        self._voice_mode = 'disabled'  # disabled | db | legacy
+
+        try:
+            self.voiceprint_db = VoicePrintDB(voiceprint_db_path, threshold=voiceprint_threshold)
+            if self.voiceprint_db.is_enrolled():
+                self._voice_mode = 'db'
+                rospy.loginfo('\033[1;32m%s\033[0m' %
+                              f'声纹库已加载：{self.voiceprint_db.db_size} 人（多用户识别模式）')
+        except Exception as e:
+            rospy.logwarn(f'VoicePrintDB 初始化失败，回退到单主人模式：{e}')
+            self.voiceprint_db = None
+
+        if self._voice_mode != 'db':
+            self.voiceprint_legacy = VoicePrint(owner_embedding_path, threshold=voiceprint_threshold)
+            if self.voiceprint_legacy.is_enrolled():
+                self._voice_mode = 'legacy'
+                rospy.loginfo('\033[1;32m%s\033[0m' % '已加载主人声纹（单主人模式）')
+            else:
+                rospy.logwarn('未找到声纹文件，将跳过声纹验证')
 
         # 创建发布者
         self.asr_pub = rospy.Publisher('~asr_result', String, queue_size=1)
@@ -96,8 +113,20 @@ class VocalDetect(object):
                 speech.play_audio(dong_audio_path)
 
                 # 声纹验证
-                if self.voiceprint.is_enrolled():
-                    is_match, confidence = self.voiceprint.verify(recording_audio_path)
+                if self._voice_mode == 'db':
+                    name, conf, ok = self.voiceprint_db.identify(recording_audio_path)
+                    if not ok:
+                        rospy.logwarn('声纹未匹配到任何注册人 (最佳相似度: %.4f)，拒绝执行命令' % conf)
+                        speech.play_audio(not_owner_audio_path)
+                        if self.awake_method == 'xf':
+                            pass
+                        else:
+                            self.kws.start()
+                        return
+                    rospy.loginfo('\033[1;32m%s\033[0m' %
+                                  f'声纹匹配：{name} (相似度 {conf:.4f})')
+                elif self._voice_mode == 'legacy':
+                    is_match, confidence = self.voiceprint_legacy.verify(recording_audio_path)
                     if not is_match:
                         rospy.logwarn('声纹验证不通过 (相似度: %.4f)，拒绝执行命令' % confidence)
                         speech.play_audio(not_owner_audio_path)
