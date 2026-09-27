@@ -2,12 +2,12 @@
 # encoding: utf-8
 # 声纹录入 / 管理脚本（带语音提示）
 # 用法:
-#   python enroll_voiceprint.py                       # 默认模式：注册"主人"声纹（旧行为）
-#   python enroll_voiceprint.py --name 张三             # 注册张三的声纹（写入 voiceprint_db.yaml）
+#   python enroll_voiceprint.py --name 张三             # 注册张三，录 1 段 5 秒，自动跑完无需按键
+#   python enroll_voiceprint.py --name 张三 --samples 3 --duration 5   # 多段取平均更准
 #   python enroll_voiceprint.py --list                 # 列出已录入的人
 #   python enroll_voiceprint.py --remove 张三           # 删除张三的声纹
 # 公共参数:
-#   --samples 3      录制样本数量
+#   --samples 1      录制样本数量
 #   --duration 5     每段录音时长/秒
 #   --threshold 0.7  声纹匹配阈值（仅在使用多用户库时生效）
 #   --silent         关闭语音播报，仅打印文字（自动化/测试用）
@@ -191,11 +191,14 @@ def record_audio(duration=5, sample_rate=48000, silent=False):
 
 
 def _record_samples(samples, duration, silent=False):
-    """录制多段样本并返回路径列表。每次录音前 TTS 播报提示。"""
-    _say(f'接下来要录 {samples} 段声音，每段 {duration} 秒。请用正常说话的音量。', silent=silent)
+    """录制多段样本。脚本启动后立即开始,无需按 Enter。
+    段间短暂停顿 0.5s 便于用户喘息,但不需要任何键盘交互。
+    """
+    _say(f'好,我们录 {samples} 段,每段 {duration} 秒,请用正常说话的音量。', silent=silent)
     audio_paths = []
     for i in range(samples):
-        input(f'  [按 Enter 开始第 {i + 1}/{samples} 段录音...]')
+        if i > 0:
+            time.sleep(0.5)  # 段间短停,无需按键
         path = record_audio(duration=duration, silent=silent)
         audio_paths.append(path)
         print()
@@ -297,7 +300,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument('--samples', type=int, default=3, help='录制样本数量 (默认: 3)')
+    parser.add_argument('--samples', type=int, default=1, help='录制样本数量 (默认: 1)')
     parser.add_argument('--duration', type=int, default=5, help='每段录音时长/秒 (默认: 5)')
     parser.add_argument('--threshold', type=float, default=None, help='声纹匹配阈值 (默认使用config中的值)')
     parser.add_argument('--silent', action='store_true', help='关闭语音播报，仅打印文字')
