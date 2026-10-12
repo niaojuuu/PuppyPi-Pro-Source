@@ -1,0 +1,11 @@
+serverAddr = "120.27.201.4"
+serverPort = 7000
+auth.token = "Aa@123456!"
+
+[[proxies]]
+name = "wechat-callback"
+type = "http"
+localIP = "127.0.0.1"
+localPort = 8088
+customDomains = ["xbcx.com.cn"]
+locations = ["/zpjwecom/"]

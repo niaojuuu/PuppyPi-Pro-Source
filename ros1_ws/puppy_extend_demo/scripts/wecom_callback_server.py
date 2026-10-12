@@ -151,7 +151,7 @@ class CallbackServer:
         self.public_base_url = public_base_url
         self.logger = logger
         self.app = Flask('wecom_callback')
-        self.app.add_url_rule('/wecom/callback',
+        self.app.add_url_rule('/zpjwecom/callback',
                               view_func=self._dispatch,
                               methods=['GET', 'POST'])
 
@@ -165,7 +165,7 @@ class CallbackServer:
         timestamp = request.args.get('timestamp', '')
         nonce = request.args.get('nonce', '')
         echostr = request.args.get('echostr', '')
-        self.logger.info(f'[WeCom] GET /wecom/callback 验证 ts={timestamp} nonce={nonce}')
+        self.logger.info(f'[WeCom] GET /zpjwecom/callback 验证 ts={timestamp} nonce={nonce}')
         if not self.crypto.verify_signature(msg_signature, timestamp, nonce, echostr):
             self.logger.error('[WeCom] 验签失败')
             return 'verify fail', 403
@@ -217,8 +217,8 @@ class CallbackServer:
         return 'success', 200
 
     def start(self, host: str, port: int):
-        self.logger.info(f'[WeCom] Flask 已绑定 http://{host}:{port}/wecom/callback')
-        self.logger.info(f'[WeCom] 公网回调 URL：{self.public_base_url}/wecom/callback')
+        self.logger.info(f'[WeCom] Flask 已绑定 http://{host}:{port}/zpjwecom/callback')
+        self.logger.info(f'[WeCom] 公网回调 URL：{self.public_base_url}')
         self.app.run(host=host, port=port, threaded=True,
                      use_reloader=False, debug=False)
 
@@ -275,9 +275,15 @@ def start_callback_server(config: dict, incoming_queue: queue.Queue,
         host=wework.get('callback_host', '0.0.0.0'),
         port=int(wework.get('callback_port', 8088)),
     )
+    # Flask 必须起，否则企业微信后台「保存」时 GET 验证无法响应。
+    # 即便 corp_id/token 是占位、get_token 失败，也先让 Flask 监听端口。
     try:
         client.get_token()
+        logger.info('[WeCom] access_token 预热成功')
+    except Exception as e:
+        logger.warning(f'[WeCom] access_token 预热失败（配置未就绪？）：{e}；Flask 仍会启动，URL 验证可响应')
+    try:
         server.start(**flask_kwargs)
     except Exception as e:
-        logger.error(f'[WeCom] 启动失败：{e}')
+        logger.error(f'[WeCom] Flask 启动失败：{e}')
         raise

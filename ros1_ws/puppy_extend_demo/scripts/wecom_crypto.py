@@ -123,9 +123,13 @@ class WeComCrypto:
         except Exception as e:
             raise WeComCryptoError(f'echostr 解密失败：{e}')
         plain = _pkcs7_unpad(plain_padded)
-        if len(plain) < 16:
+        if len(plain) < 20:
             raise WeComCryptoError('echostr 解密结果过短')
-        return plain[16:].decode('utf-8')
+        # 跟 decrypt 一样按 msg_len 提取 msg 字段（不是 plain[16:]）
+        msg_len = socket.ntohl(struct.unpack('I', plain[16:20])[0])
+        if len(plain) < 20 + msg_len:
+            raise WeComCryptoError(f'echostr msg 长度 {msg_len} 越界')
+        return plain[20:20 + msg_len].decode('utf-8')
 
     def check_signature_and_decrypt(self, msg_signature: str, timestamp: str,
                                     nonce: str, body_xml: str) -> ET.Element:
