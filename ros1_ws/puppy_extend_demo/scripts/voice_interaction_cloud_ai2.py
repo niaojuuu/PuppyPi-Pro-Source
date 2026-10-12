@@ -158,7 +158,7 @@ MAX_RECORD_SECONDS = 10   # 云端识别最长录音时长（撞顶后强制停�
 PREROLL_SEC = 0.5
 
 # LLM 配置 - 阿里云 DashScope
-DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', 'sk-4fe56ee3d9e44b248516ef93d95190f4')
+DASHSCOPE_API_KEY = os.environ.get('DASHSCOPE_API_KEY', 'sk-ws-H.PPDDIDH.UnKl.MEQCIEVX9-EptCx2a0gNWchwgi5P8IJZ1k_iKnbdJ93UvCX4AiBheJidJOD6uiOGN6aZapMW_Yk8MMpnNC-Xr3E0M4ntAQ')
 QWEN_MODEL = 'qwen3.5-plus'  # 语音识别和语言理解都使用 Qwen3.5
 
 if not DASHSCOPE_API_KEY:

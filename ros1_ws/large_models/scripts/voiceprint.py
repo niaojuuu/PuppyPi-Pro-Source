@@ -14,6 +14,21 @@ import os
 import time
 import threading
 import numpy as np
+
+# 在 import resemblyzer（会触发 torch import）之前，先用 ctypes 预加载系统的 libgomp。
+# 这样 torch 会用已加载的系统 libgomp，不会去加载 torch 自带的
+# `torch.libs/libgomp-*.so.1.0.0`（该库使用静态 TLS 模型，在 aarch64 上
+# 当多个动态库占用静态 TLS 时会触发 "cannot allocate memory in static TLS block"）。
+# 仅在 aarch64 上需要，x86 上是 no-op。
+if os.uname().machine == 'aarch64':
+    _SYSTEM_LIBGOMP = '/usr/lib/aarch64-linux-gnu/libgomp.so.1'
+    if os.path.exists(_SYSTEM_LIBGOMP) and 'LD_PRELOAD' not in os.environ:
+        try:
+            import ctypes
+            ctypes.CDLL(_SYSTEM_LIBGOMP, mode=ctypes.RTLD_GLOBAL)
+        except Exception:
+            pass
+
 from resemblyzer import VoiceEncoder, preprocess_wav
 
 

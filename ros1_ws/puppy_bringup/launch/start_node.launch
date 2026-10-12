@@ -16,6 +16,18 @@
     <node name="camera_pan_tilt" pkg="puppy_extend_demo" type="camera_pan_tilt.py" output="screen" />
 
     <!-- 云端 AI 语音交互节点 -->
-    <node name="voice_interaction_cloud_ai2" pkg="puppy_extend_demo" type="voice_interaction_cloud_ai2.py" output="screen" />
+    <!-- LD_PRELOAD 把 torch 自带的 libgomp 在所有其他库之前加载，
+         让它的静态 TLS 在大量库占满之前先占好位。
+         否则在 aarch64 上会在 import resemblyzer/torch 时报
+         "cannot allocate memory in static TLS block"。 -->
+    <node name="voice_interaction_cloud_ai2" pkg="puppy_extend_demo" type="voice_interaction_cloud_ai2.py" output="screen">
+        <env name="LD_PRELOAD" value="/home/ubuntu/.local/lib/python3.8/site-packages/torch.libs/libgomp-804f19d4.so.1.0.0" />
+    </node>
+
+    <!-- 企业微信文本/语音控制节点（与 voice 节点并发运行） -->
+    <node name="wechat_interaction_cloud_ai" pkg="puppy_extend_demo" type="wechat_interaction_cloud_ai.py" output="screen"
+          args="--config /home/ubuntu/puppypi/src/puppy_extend_demo/config/wechat_config.yaml">
+        <env name="LD_PRELOAD" value="/home/ubuntu/.local/lib/python3.8/site-packages/torch.libs/libgomp-804f19d4.so.1.0.0" />
+    </node>
 
 </launch>
