@@ -1,0 +1,37 @@
+# 企业微信自建应用回调 — 微信控制 PuppyPi 配置
+# 字段全部必填（除 allowed_users 外）。
+#
+# 获取位置：
+#   corpid       : 我的企业 → 企业信息 → CorpID
+#   corp_secret  : 自建应用 → 应用 Secret
+#   agent_id     : 自建应用 → AgentId
+#   token        : 自建应用 → 接收消息 → API 接收消息 → 设置 API 接收 → Token
+#   aes_key      : 自建应用 → 接收消息 → API 接收消息 → EncodingAESKey (43字符)
+#
+# 公网回调 URL（必须 HTTPS）：
+#   推荐 Tailscale Funnel：tailscale funnel 8088 on
+#   拿到的 https://<node>.ts.net/wecom/callback 填到企业微信后台。
+#
+# 启动命令：
+#   rosrun puppy_extend_demo wechat_interaction_cloud_ai.py \
+#     --config /home/ubuntu/puppypi/src/puppy_extend_demo/config/wechat_config.yaml
+
+wework:
+  corp_id: "REPLACE_WITH_CORP_ID"
+  corp_secret: "HJzMs7lRclj26CiBuNc1cJ6zP600oGGZGYcBPGcDbYk"
+  agent_id: "1000065"
+  token: "REPLACE_WITH_CALLBACK_TOKEN"
+  aes_key: "REPLACE_WITH_43CHAR_BASE64_ENCODING_AES_KEY_XXX"
+  callback_host: "0.0.0.0"
+  callback_port: 8088
+  public_base_url: "https://raspberrypi.tail620bc8.ts.net"
+
+# 阿里云 DashScope API Key（与 voice 脚本共用）
+# 缺省读环境变量 DASHSCOPE_API_KEY
+dashscope_api_key: ""
+
+# 安全：留空 = 接受应用可见范围内所有用户；填入企业内部 UserID 后只这些用户能触发
+allowed_users: []
+
+# 日志
+log_dir: "/tmp"
