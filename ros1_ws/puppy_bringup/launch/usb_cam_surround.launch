@@ -1,9 +1,9 @@
 <launch>
-  <!--第二个USB摄像头（云台摄像头）-->
+  <!--第二个USB摄像头（云台摄像头，物理设备 /dev/video2 = "2M" USB cam）-->
   <arg name="camera_name" default="usb_cam_surround" />
 
   <node name="$(arg camera_name)" pkg="usb_cam" type="usb_cam_node" respawn="true" respawn_delay="2" output="screen" >
-    <param name="video_device" value="/dev/video1" />
+    <param name="video_device" value="/dev/video2" />
     <param name="image_width" value="640" />
     <param name="image_height" value="480" />
     <param name="pixel_format" value="yuyv" />
